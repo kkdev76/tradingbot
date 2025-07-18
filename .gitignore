@@ -1,0 +1,4 @@
+venv/
+crypto.env
+__pycache__/
+arch/
