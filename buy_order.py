@@ -20,12 +20,13 @@ def place_buy(symbol: str, bid_price: float, dollars: float) -> int:
     int
         Quantity of shares purchased.
     """
+    print(symbol)
     limit_price = round(bid_price + 0.05, 2)
     qty = int(dollars // limit_price)
     if qty < 1:
         raise ValueError("Dollar amount too small for even 1 share.")
     order = trading_client.submit_order(
-        symbol=symbol,
+        symbol_or_asset_id=symbol,
         qty=qty,
         side=OrderSide.BUY,
         type=OrderType.LIMIT,
