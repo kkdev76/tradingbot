@@ -79,16 +79,19 @@ def bootstrap_history(symbol):
 async def macd_loop():
     while True:
         await asyncio.sleep(60)
+        log("⏱️ Timer ticked. Recomputing MACD for all symbols.")
         for sym in SYMBOLS:
             if dfs[sym].empty: continue
             dfs[sym] = compute_macd(dfs[sym])
             macd   = dfs[sym].iloc[-1]["macd"]
             signal = dfs[sym].iloc[-1]["macd_signal"]
+            log(f"📈 {sym}  MACD={macd:.4f}  Signal={signal:.4f}")
             if holdings[sym] > 0:
                 if macd <= last_macd[sym]:
                     ask = dfs[sym].iloc[-1]["close"]
                     place_sell(sym, ask, holdings[sym])
-                    log(f"🔴 SELL {sym} {holdings[sym]} @ ask-0.05  (MACD {macd:.4f} ≤ Prev {last_macd[sym]:.4f})")
+                    log(f"🔴 SELL {sym} {holdings[sym]} @ {ask-0.05:.2f}  "
+                        f"(MACD {macd:.4f} ≤ Prev {last_macd[sym]:.4f})")
                     holdings[sym] = 0
                 else:
                     last_macd[sym] = macd
@@ -101,12 +104,16 @@ async def handle_bar(bar):
     dfs[sym] = compute_macd(dfs[sym])
     macd   = dfs[sym].iloc[-1]["macd"]
     signal = dfs[sym].iloc[-1]["macd_signal"]
+    log(f"📥 {sym} bar {ts}  Close={new['close']:.2f}  "
+        f"MACD={macd:.4f}  Signal={signal:.4f}")
+     
     if holdings[sym]==0 and macd>signal>0:
         bid = bar.get("b", new["close"])
         qty = place_buy(sym, bid, budget_for(sym))
         holdings[sym]=qty
         last_macd[sym]=macd
-        log(f"🟢 BUY {sym} {qty} @ bid+0.05  (MACD {macd:.4f} > Signal {signal:.4f})")
+        log(f"🟢 BUY {sym} {qty} @ {bid+0.05:.2f}  "
+            f"(MACD {macd:.4f} > Signal {signal:.4f})")
 
 async def main():
     for s in SYMBOLS:
