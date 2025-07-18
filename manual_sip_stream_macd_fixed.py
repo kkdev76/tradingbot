@@ -7,22 +7,30 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
 import websockets
 from utils import compute_macd
+from buy_order import place_buy
+from sell_order import place_sell
+DOLLARS = float(os.getenv("DOLLAR_AMOUNT", "500"))
 
 load_dotenv("crypto.env")
 API_KEY = os.getenv("APCA_API_KEY_ID")
 SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 SYMBOL = os.getenv("CRYPTO_SYMBOL", "AAPL")
 WS_URL = "wss://stream.data.alpaca.markets/v2/sip"
+print(SYMBOL)
+
 
 df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 last_timestamp = None
+holding_qty = 0          # how many shares we own
+last_macd   = None       # MACD at the time we bought
+
 
 def log(msg):
     print(f"[{datetime.now(timezone.utc).isoformat()}] {msg}")
 
 def bootstrap_history():
     global df, last_timestamp
-    log(f"📦 Bootstrapping historical data for {SYMBOL}...")
+    log(f"📦 Hello Bootstrapping historical data for {SYMBOL}...")
     end = datetime.now(timezone.utc)
     start = end - timedelta(minutes=60)
     url = f"https://data.alpaca.markets/v2/stocks/{SYMBOL}/bars"
@@ -39,7 +47,18 @@ def bootstrap_history():
         "limit": 60
     }
 
+    print(f"\n📦 Bootstrapping historical data for: {SYMBOL}")
+    print(f"🔗 URL: {url}")
+    print(f"📊 Params: {params}")
+    print(f"🔐 Headers: {headers}")
+
+    
     resp = requests.get(url, headers=headers, params=params)
+
+    print(f"🔁 Response Code: {resp.status_code}")
+    print(f"📝 Response Text: {resp.text}\n")
+
+
     data = resp.json()
 
     if "bars" not in data or not data["bars"]:
@@ -87,6 +106,29 @@ async def macd_loop():
         else:
             last_timestamp = df["timestamp"].iloc[-1]
         df[:] = compute_macd(df)
+                # ─── SELL logic ─────────────────────────────────
+        if holding_qty > 0:
+            macd   = df.iloc[-1]["macd"]
+            signal = df.iloc[-1]["macd_signal"]
+            global last_macd
+            if macd <= last_macd:      # momentum stalled or reversed
+                ask_price = df.iloc[-1]["close"]  # fallback
+                if "ask_price" in locals():
+                    ask_price = ask_price        # use real ask if you capture it
+                place_sell(SYMBOL, ask_price, holding_qty)
+                log(f"🔴 SELL {holding_qty} @ Ask‑0.05  (MACD {macd:.4f} ≤ Prev {last_macd:.4f})")
+                holding_qty = 0
+            else:
+                last_macd = macd  # trend still improving
+        # ────────────────────────────────────────────────
+
+
+
+
+
+
+
+
         print_latest_macd()
 
 async def handle_bar(bar):
@@ -104,6 +146,22 @@ async def handle_bar(bar):
 
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).tail(1000)
     df[:] = compute_macd(df)
+    
+    # ─── BUY logic ───────────────────────────────────────
+    if "macd" in df.columns and "macd_signal" in df.columns:
+        macd   = df.iloc[-1]["macd"]
+        signal = df.iloc[-1]["macd_signal"]
+        global holding_qty, last_macd
+        if holding_qty == 0 and macd > signal > 0:          # bullish crossover
+            bid_price = bar["b"] if "b" in bar else new_row["close"]
+            holding_qty = place_buy(SYMBOL, bid_price, DOLLARS)
+            last_macd   = macd
+            log(f"🟢 BUY {holding_qty} @ Bid+0.05  (MACD {macd:.4f} > Signal {signal:.4f})")
+    # ─────────────────────────────────────────────────────
+
+
+
+
     log(f"📥 Received new bar: {SYMBOL} {ts} Close={new_row['close']}")
     print_latest_macd()
 
