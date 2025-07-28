@@ -1,0 +1,9 @@
+pandas>=2.0
+python-dotenv>=1.0
+requests>=2.31
+websockets>=11.0
+alpaca-py>=0.13
+Flask>=2.0.0
+plotly>=5.0.0
+fastapi
+uvicorn
