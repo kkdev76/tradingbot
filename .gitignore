@@ -1,0 +1,34 @@
+venv/
+crypto.env
+__pycache__/
+arch/
+
+# Node modules
+dashboard/node_modules/
+
+# Build output
+dashboard/.next/
+dashboard/out/
+
+# Log files
+trading_log.txt
+*.log
+
+# Data snapshots
+/data/
+__pycache__/
+
+# OS-generated
+.DS_Store
+Thumbs.db
+
+# Environment and secrets
+.env
+crypto.env
+
+# Dashboard large files (manual exclusion)
+dashboard/.turbo/
+dashboard/public/
+
+# Prevent npm debug logs
+npm-debug.log*
