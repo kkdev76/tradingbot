@@ -1,0 +1,84 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <title>Backtest Visualization</title>
+</head>
+<body>
+<div id="price_plot" style="height: 50vh;"></div>
+<div id="macd_plot" style="height: 40vh;"></div>
+
+<script>
+    const price_trace = {
+        x: PRICE_TIMESTAMPS,
+        y: PRICE_VALUES,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Price',
+        line: { color: 'black' }
+    };
+
+    const macd_trace = {
+        x: PRICE_TIMESTAMPS,
+        y: MACD_VALUES,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'MACD',
+        line: { dash: 'dot', color: 'blue' }
+    };
+
+    const signal_trace = {
+        x: PRICE_TIMESTAMPS,
+        y: SIGNAL_VALUES,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Signal',
+        line: { dash: 'dot', color: 'orange' }
+    };
+
+    const buy_markers = {
+        x: BUY_TIMES,
+        y: BUY_PRICES,
+        mode: 'markers+text',
+        type: 'scatter',
+        name: 'Buy',
+        marker: { color: 'green', size: 12, symbol: 'triangle-up' },
+        text: Array(BUY_TIMES.length).fill('Buy'),
+        textposition: 'top center'
+    };
+
+    const sell_markers = {
+        x: SELL_TIMES,
+        y: SELL_PRICES,
+        mode: 'markers+text',
+        type: 'scatter',
+        name: 'Sell',
+        marker: { color: 'red', size: 12, symbol: 'triangle-down' },
+        text: Array(SELL_TIMES.length).fill('Sell'),
+        textposition: 'bottom center'
+    };
+
+    const price_layout = {
+        title: 'Stock Price',
+        margin: { t: 50 },
+        showlegend: true,
+        xaxis: { rangeslider: { visible: false }, title: 'Time' },
+        yaxis: { title: 'Price' }
+    };
+
+    const macd_layout = {
+        title: 'MACD & Signal',
+        margin: { t: 30 },
+        showlegend: true,
+        xaxis: { matches: 'x1', title: 'Time' },
+        yaxis: { title: 'Value' }
+    };
+
+    Plotly.newPlot('price_plot', [price_trace, buy_markers, sell_markers], price_layout);
+    Plotly.newPlot('macd_plot', [macd_trace, signal_trace], macd_layout);
+
+</script>
+</body>
+</html>
