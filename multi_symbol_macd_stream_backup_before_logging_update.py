@@ -55,15 +55,15 @@ WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 def _load_negative_pl_threshold() -> float:
     raw = os.getenv("NEGATIVE_PL_THRESHOLD") or os.getenv("NEGATIVE_PL_LIMIT")
     if raw is None:
-        log(f"⚙️ NEGATIVE_PL_THRESHOLD not set; defaulting to -250.00")
+        logging.warning("NEGATIVE_PL_THRESHOLD not set; defaulting to -250.00")
         return -250.0
     try:
         val = float(raw)
     except Exception:
-        log(f"⚠️ Invalid NEGATIVE_PL_THRESHOLD value: {raw}. Falling back to -250.00")
+        logging.error(f"Invalid NEGATIVE_PL_THRESHOLD value: {raw}. Falling back to -250.00")
         return -250.0
     if val >= 0:
-        log(f"⚠️ NEGATIVE_PL_THRESHOLD should be NEGATIVE. Interpreting as negative of provided value.")
+        logging.warning("NEGATIVE_PL_THRESHOLD should be NEGATIVE. Interpreting as negative of provided value.")
         val = -abs(val)
     return val
 
@@ -95,71 +95,19 @@ def _cancel_all_orders_robust(client: TradingClient):
         client.cancel_orders()
         return
     except Exception as e:
-        log(f"❌ cancel_orders not available or failed: {e}")
+        logging.debug(f"cancel_orders not available or failed: {e}")
     try:
         # Older/alternate naming
         client.cancel_all_orders()
     except Exception as e:
-        log(f"❌ Failed to cancel orders via API: {e}")
-
-def _cancel_open_orders_for_symbol(client: TradingClient, sym: str) -> int:
-    """
-    Cancel any active/unfilled orders for a given symbol.
-    Returns the number of orders successfully canceled.
-    """
-    cancelled = 0
-    orders = None
-    # Try multiple ways to fetch open/active orders
-    try:
-        # Newer enum path
-        orders = client.get_orders(status=getattr(OrderStatus, "OPEN", "open"))
-    except Exception as e:
-        try:
-            orders = client.get_orders(status="open")
-        except Exception as e2:
-            log(f"❌ Unable to fetch open orders for cleanup on {sym}: {e2}")
-            return 0
-
-    for o in (orders or []):
-        try:
-            o_symbol = getattr(o, "symbol", getattr(o, "asset_symbol", None))
-            o_status = str(getattr(o, "status", "")).lower()
-            if o_symbol != sym:
-                continue
-            # Consider statuses that are still actionable (unfilled/working/partial)
-            actionable_statuses = {"new", "accepted", "open", "partially_filled", "pending_new", "accepted_for_bidding"}
-            if o_status not in actionable_statuses:
-                continue
-
-            oid = getattr(o, "id", getattr(o, "order_id", None))
-            if not oid:
-                continue
-            try:
-                # Try common cancel-by-id methods
-                if hasattr(client, "cancel_order_by_id"):
-                    client.cancel_order_by_id(oid)
-                elif hasattr(client, "cancel_order"):
-                    client.cancel_order(oid)
-                else:
-                    # Fallback: cancel all (last resort)
-                    _cancel_all_orders_robust(client)
-                cancelled += 1
-                log(f"🧹 Canceled stale open order for {sym} (id={oid}, status={o_status})")
-            except Exception as ce:
-                log(f"❌ Failed to cancel order {oid} for {sym}: {ce}")
-        except Exception as ie:
-            log(f"❌ Error while scanning order for {sym}: {ie}")
-    if cancelled > 0:
-        log(f"🧹 Cleanup complete for {sym}: canceled {cancelled} stale open order(s)")
-    return cancelled
-
+        logging.warning(f"Failed to cancel orders via API: {e}")
 
 def _list_positions_len(client: TradingClient) -> int:
     try:
         poss = client.get_all_positions()
         return len(poss or [])
     except Exception as e:
-        log(f"❌ list positions failed: {e}")
+        logging.warning(f"list positions failed: {e}")
         return 0
 
 def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = ""):
@@ -167,31 +115,31 @@ def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = "")
     global STOP_TRADING
     STOP_TRADING = True
     try:
-        log(f"🛑🛑🛑 [RiskGuard] HALTING TRADES: {reason} ***")
-        log(f"[RiskGuard] Cancelling all open orders...")
+        logging.error(f"[RiskGuard] *** HALTING TRADES: {reason} ***")
+        logging.info("[RiskGuard] Cancelling all open orders...")
         _cancel_all_orders_robust(client)
 
-        log(f"[RiskGuard] Closing all positions at market...")
+        logging.info("[RiskGuard] Closing all positions at market...")
         try:
             client.close_all_positions(cancel_orders=True)
         except TypeError:
             # if older signature without keyword
             client.close_all_positions(True)
         except Exception as e:
-            log(f"[RiskGuard] close_all_positions error: {e}")
+            logging.exception(f"[RiskGuard] close_all_positions error: {e}")
 
         deadline = time.time() + 45
         while time.time() < deadline:
             remaining = _list_positions_len(client)
             if remaining == 0:
-                log(f"[RiskGuard] All positions closed.")
+                logging.info("[RiskGuard] All positions closed.")
                 break
-            log(f"[RiskGuard] Waiting for {remaining} positions to close...")
+            logging.info(f"[RiskGuard] Waiting for {remaining} positions to close...")
             time.sleep(3)
 
-        log(f"🛑🛑🛑 [RiskGuard] Exiting process due to daily P/L breach.")
+        logging.error("[RiskGuard] Exiting process due to daily P/L breach.")
     except Exception as e:
-        log(f"[RiskGuard] Error during liquidation: {e}")
+        logging.exception(f"[RiskGuard] Error during liquidation: {e}")
     finally:
         try:
             for h in logging.getLogger().handlers:
@@ -218,7 +166,91 @@ from zoneinfo import ZoneInfo
 
 _last_shutdown_check_minute = None
 
+def scheduled_shutdown_guard_check(client: TradingClient):
+    """
+    At CRON_SHUTDOWN time (PST/PDT), cancel all orders, liquidate, and exit.
+    """
+    global _last_shutdown_check_minute, STOP_TRADING
 
+    if STOP_TRADING:
+        return  # Already halted
+
+    shutdown_time_str = os.getenv("CRON_SHUTDOWN", "").strip()
+    if not shutdown_time_str:
+        return  # Disabled if not set
+
+    try:
+        shutdown_hour, shutdown_minute = map(int, shutdown_time_str.split(":"))
+    except Exception:
+        logging.error(f"Invalid CRON_SHUTDOWN value: {shutdown_time_str}")
+        return
+
+    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
+    minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
+
+    # Avoid repeating shutdown check more than once per minute
+    if _last_shutdown_check_minute == minute_key:
+        return
+    _last_shutdown_check_minute = minute_key
+
+    if now_pt.hour == shutdown_hour and now_pt.minute == shutdown_minute:
+        logging.warning(f"[ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT")
+        trigger_global_liquidation_and_exit(
+            client,
+            reason=f"Scheduled shutdown at {shutdown_time_str} PT"
+        )
+
+    try:
+        daily_pl = get_daily_pl(client)
+        logging.info(f"[RiskGuard] Daily P/L: {daily_pl:.2f} (threshold {NEGATIVE_PL_THRESHOLD:.2f})")
+        if daily_pl <= NEGATIVE_PL_THRESHOLD:
+            logging.error(f"[RiskGuard] BREACH: {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
+            trigger_global_liquidation_and_exit(client, reason=f"Daily P/L {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
+    except Exception as e:
+        logging.exception(f"[RiskGuard] Failed to compute daily P/L: {e}")
+
+
+# ===== Scheduled Shutdown (Pacific Time) =====
+from zoneinfo import ZoneInfo  # ensure available for timezone-aware comparison
+_last_shutdown_check_minute = None
+
+def scheduled_shutdown_guard_check(client: TradingClient):
+    """At CRON_SHUTDOWN time (PST/PDT), cancel all orders, liquidate, and exit.
+    CRON_SHUTDOWN format: 'HH:MM' (24h). Interpreted in America/Los_Angeles regardless of server TZ.
+    """
+    global _last_shutdown_check_minute, STOP_TRADING
+    if STOP_TRADING:
+        return  # already halted
+
+    shutdown_time_str = (os.getenv("CRON_SHUTDOWN") or "").strip()
+    if not shutdown_time_str:
+        return  # disabled
+
+    try:
+        shutdown_hour, shutdown_minute = map(int, shutdown_time_str.split(":"))
+    except Exception:
+        logging.error(f"Invalid CRON_SHUTDOWN value: {shutdown_time_str}. Expected HH:MM (24h)." )
+        return
+
+    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
+    minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
+    if _last_shutdown_check_minute == minute_key:
+        return  # already checked this minute
+    _last_shutdown_check_minute = minute_key
+
+    if now_pt.hour == shutdown_hour and now_pt.minute == shutdown_minute:
+        logging.warning(f"[ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT" )
+        trigger_global_liquidation_and_exit(client, reason=f"Scheduled shutdown at {shutdown_time_str} PT")
+
+# Utility functions
+def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
+    exp1 = df['close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['close'].ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    sig = macd.ewm(span=9, adjust=False).mean()
+    df['macd'] = macd
+    df['macd_signal'] = sig
+    return df
 
 def fetch_quote(sym: str) -> tuple:
     """Return the most recent bid and ask from the websocket cache."""
@@ -249,56 +281,7 @@ def bootstrap_history(sym: str):
     log(f"✅ {sym}: bootstrapped {len(df)} bars.")
 
 # Real-time bar handling
-
-def scheduled_shutdown_guard_check(client: TradingClient):
-    """
-    At CRON_SHUTDOWN time (PST/PDT), cancel all orders, liquidate, and exit.
-    """
-    global _last_shutdown_check_minute, STOP_TRADING
-
-    if STOP_TRADING:
-        return  # Already halted
-
-    shutdown_time_str = os.getenv("CRON_SHUTDOWN", "").strip()
-    if not shutdown_time_str:
-        return  # Disabled if not set
-
-    try:
-        shutdown_hour, shutdown_minute = map(int, shutdown_time_str.split(":"))
-    except Exception:
-        log(f"⚠️ Invalid CRON_SHUTDOWN value: {shutdown_time_str}")
-        return
-
-    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
-    minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
-
-    # Avoid repeating shutdown check more than once per minute
-    if _last_shutdown_check_minute == minute_key:
-        return
-    _last_shutdown_check_minute = minute_key
-
-    if now_pt.hour == shutdown_hour and now_pt.minute == shutdown_minute:
-        log(f"🛑🛑🛑 [ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT")
-        trigger_global_liquidation_and_exit(
-            client,
-            reason=f"Scheduled shutdown at {shutdown_time_str} PT"
-        )
-
-    try:
-        daily_pl = get_daily_pl(client)
-        log(f"[RiskGuard] Daily P/L: {daily_pl:.2f} (threshold {NEGATIVE_PL_THRESHOLD:.2f})")
-        if daily_pl <= NEGATIVE_PL_THRESHOLD:
-            log(f"[RiskGuard] BREACH: {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
-            trigger_global_liquidation_and_exit(client, reason=f"Daily P/L {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
-    except Exception as e:
-        log(f"[RiskGuard] Failed to compute daily P/L: {e}")
-
-
-# ===== Scheduled Shutdown (Pacific Time) =====
-from zoneinfo import ZoneInfo  # ensure available for timezone-aware comparison
-_last_shutdown_check_minute = None
-
-def handle_bar(bar: dict):
+async def handle_bar(bar: dict):
     sym = bar['S']
 
     # ===== Guards: run once per minute =====
@@ -306,6 +289,10 @@ def handle_bar(bar: dict):
     
     # ===== Scheduled Shutdown: check once per minute =====
     scheduled_shutdown_guard_check(trading_client)
+    # ===== Scheduled Shutdown: check once per minute =====
+    scheduled_shutdown_guard_check(trading_client)
+    scheduled_shutdown_guard_check(trading_client)
+    
     ts = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
     # Append bar and compute MACD
     row = {'timestamp': ts, 'open': bar['o'], 'high': bar['h'], 'low': bar['l'], 'close': bar['c'], 'volume': bar['v']}
@@ -329,7 +316,7 @@ def handle_bar(bar: dict):
 
     # SELL/HOLD logic
     if tracked_macd[sym] is not None:
-        log(f"ℹ️ Checking SELL/HOLD for {sym}: current MACD={macd:.4f}, tracked={tracked_macd[sym]:.4f}")
+        log(f"Checking SELL/HOLD for {sym}: current MACD={macd:.4f}, tracked={tracked_macd[sym]:.4f}")
         if macd > tracked_macd[sym]:
             log(f"🔼 HOLD {sym}: MACD rose {tracked_macd[sym]:.4f} → {macd:.4f}")
             tracked_macd[sym] = macd
@@ -337,26 +324,18 @@ def handle_bar(bar: dict):
             bid, _ = fetch_quote(sym)
             if pos > 0:
                 if STOP_TRADING:
-                    log(f"🛑🛑🛑 [RiskGuard] Blocked SELL {sym} x{pos} (trading halted)")
+                    log(f"[RiskGuard] Blocked SELL {sym} x{pos} (trading halted)")
                     return
                 log(f"🔴 SELL {sym}: MACD dropped to {macd:.4f} ≤ tracked {tracked_macd[sym]:.4f}, selling {pos} @ {bid:.2f}")
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
-                log(f"🕒 Updated last_trade_time for {sym} to {last_trade_time[sym]}")
+                log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
             tracked_macd[sym] = None
         return
 
     # BUY logic with cooldown
     if pos == 0:
-        # If a BUY was placed earlier but never filled, there could be open/working orders.
-        # Proactively cancel any such orders for this symbol and reset tracking vars.
-        stale = _cancel_open_orders_for_symbol(trading_client, sym)
-        if stale > 0:
-            tracked_macd[sym] = None
-            last_trade_time[sym] = datetime.min.replace(tzinfo=timezone.utc)
-            log(f"🔄 Reset tracked_macd and last_trade_time after canceling {stale} stale order(s) for {sym}")
-    
-        log(f"ℹ️ BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Threshold={PERCENT_THRESHOLD}")
+        log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Threshold={PERCENT_THRESHOLD}")
         gap_pct = (abs(abs(macd)-abs(sig))/abs(sig))*100 if sig else 0
         if macd > sig and  gap_pct > PERCENT_THRESHOLD*100:
             now = datetime.now(timezone.utc)
@@ -373,14 +352,14 @@ def handle_bar(bar: dict):
             limit = round(bid + 0.01, 2)
 
             if STOP_TRADING:
-                log(f"🛑🛑🛑 [RiskGuard] Blocked BUY {sym} (trading halted)")
+                log(f"[RiskGuard] Blocked BUY {sym} (trading halted)")
                 return
             
             log(f"🟢 BUY {sym}: MACD:{macd}, Signal:{sig}  {macd:.4f}>{sig:.4f}, gap {gap_pct:.1f}% ≥ {PERCENT_THRESHOLD*100:.1f}% → buying @ {limit:.2f}")
             place_buy(sym, limit, remaining_budget[sym])
             tracked_macd[sym] = macd
             last_trade_time[sym] = now
-            log(f"🕒 Updated last_trade_time for {sym} to {last_trade_time[sym]}")
+            log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
         elif macd > sig:
              
             log(f"⚪️ {sym}: MACD>sig but gap {gap_pct:.1f}% < {PERCENT_THRESHOLD*100:.1f}%, skipping buy")
@@ -392,13 +371,13 @@ def handle_bar(bar: dict):
 async def main():
     for sym in SYMBOLS:
         bootstrap_history(sym)
-    log(f"🚀 Connecting to real-time stream...")
+    log("🚀 Connecting to real-time stream...")
     async with websockets.connect(WS_URL) as ws:
         await ws.send(json.dumps({'action':'auth','key':API_KEY,'secret':SECRET_KEY}))
         await ws.recv()
         # Subscribe to both bars and quotes for real-time streaming
         await ws.send(json.dumps({'action':'subscribe','bars': SYMBOLS, 'quotes': SYMBOLS}))
-        log(f"🔔 Subscribed to bars: {','.join(SYMBOLS)}")
+        log(f"Subscribed to bars: {','.join(SYMBOLS)}")
         while True:
             msg = await ws.recv()
             data = json.loads(msg) if isinstance(msg, str) else msg
@@ -419,3 +398,24 @@ if __name__ == '__main__':
 # ===================== BEGIN SCHEDULED SHUTDOWN GUARD =====================
 _shutdown_check_minute = None
 _shutdown_fired_date = None
+
+def scheduled_shutdown_guard_check(client: TradingClient):
+    """At 12:55 PM America/Los_Angeles each day, liquidate and exit."""
+    global _shutdown_check_minute, _shutdown_fired_date, STOP_TRADING
+    if STOP_TRADING:
+        return
+    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
+    minute_key = now_pt.strftime("%Y-%m-%d %H:%M PT")
+    if _shutdown_check_minute == minute_key:
+        return
+    _shutdown_check_minute = minute_key
+
+    # Only act once per day, at/after 12:55 PM PT
+    if _shutdown_fired_date == now_pt.date():
+        return
+
+    if (now_pt.hour, now_pt.minute) >= (12, 55):
+        logging.error(f"[ShutdownGuard] Triggering scheduled liquidation at {now_pt.strftime('%Y-%m-%d %H:%M %Z')}")
+        _shutdown_fired_date = now_pt.date()
+        trigger_global_liquidation_and_exit(client, reason="Scheduled daily shutdown at 12:55 PM PT")
+# ====================== END SCHEDULED SHUTDOWN GUARD =====================
