@@ -354,8 +354,8 @@ async def handle_bar(bar: dict):
 
     # BUY logic with cooldown
     if pos == 0:
-        log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Threshold={PERCENT_THRESHOLD}")
         gap_pct = (abs(abs(macd)-abs(sig))/abs(sig))*100 if sig else 0
+        log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Gap={gap_pct:.2f} Threshold={PERCENT_THRESHOLD*100}")
         if macd > sig and  gap_pct > PERCENT_THRESHOLD*100:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
@@ -367,8 +367,7 @@ async def handle_bar(bar: dict):
             if -threshold < macd < threshold:
                 log(f"⏳ MACD in uncertainty zone for {sym}: |MACD|={abs(macd):.4f} < {threshold:.4f}; skipping buy")
                 return
-            return
-            
+             
             bid, _ = fetch_quote(sym)
             limit = round(bid + 0.01, 2)
 
