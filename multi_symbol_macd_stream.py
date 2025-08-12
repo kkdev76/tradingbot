@@ -364,6 +364,7 @@ async def handle_bar(bar: dict):
                 log(f"⏳ Skipping BUY for {sym}: cooldown active")
                 return
             threshold = _get_macd_neutral_threshold(sym)
+            log(f"Guard Band for for {sym}: {threshold}  ")
             if -threshold < macd < threshold:
                 log(f"⏳ MACD in uncertainty zone for {sym}: |MACD|={abs(macd):.4f} < {threshold:.4f}; skipping buy")
                 return
