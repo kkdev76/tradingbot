@@ -356,8 +356,8 @@ def handle_bar(bar: dict):
             last_trade_time[sym] = datetime.min.replace(tzinfo=timezone.utc)
             log(f"🔄 Reset tracked_macd and last_trade_time after canceling {stale} stale order(s) for {sym}")
     
-        log(f"ℹ️ BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Threshold={PERCENT_THRESHOLD}")
-        gap_pct = (abs(abs(macd)-abs(sig))/abs(sig))*100 if sig else 0
+        gap_pct = (abs(abs(macd)-abs(sig))/max(abs(sig),1e-6))*100 if sig else 0
+        log(f"ℹ️ BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Gap={gap_pct}, Threshold={PERCENT_THRESHOLD}")
         if macd > sig and  gap_pct > PERCENT_THRESHOLD*100:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
