@@ -55,15 +55,15 @@ WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 def _load_negative_pl_threshold() -> float:
     raw = os.getenv("NEGATIVE_PL_THRESHOLD") or os.getenv("NEGATIVE_PL_LIMIT")
     if raw is None:
-        logging.warning("NEGATIVE_PL_THRESHOLD not set; defaulting to -250.00")
+        log(f"⚠️ NEGATIVE_PL_THRESHOLD not set; defaulting to -250.00")
         return -250.0
     try:
         val = float(raw)
     except Exception:
-        logging.error(f"Invalid NEGATIVE_PL_THRESHOLD value: {raw}. Falling back to -250.00")
+        log(f"❌ Invalid NEGATIVE_PL_THRESHOLD value: {raw}. Falling back to -250.00")
         return -250.0
     if val >= 0:
-        logging.warning("NEGATIVE_PL_THRESHOLD should be NEGATIVE. Interpreting as negative of provided value.")
+        log(f"⚠️ NEGATIVE_PL_THRESHOLD should be NEGATIVE. Interpreting as negative of provided value.")
         val = -abs(val)
     return val
 
@@ -121,12 +121,12 @@ def _cancel_all_orders_robust(client: TradingClient):
         client.cancel_orders()
         return
     except Exception as e:
-        logging.debug(f"cancel_orders not available or failed: {e}")
+        log(f"🐞 cancel_orders not available or failed: {e}")
     try:
         # Older/alternate naming
         client.cancel_all_orders()
     except Exception as e:
-        logging.warning(f"Failed to cancel orders via API: {e}")
+        log(f"⚠️ Failed to cancel orders via API: {e}")
 
 def _cancel_open_orders_for_symbol(client: TradingClient, sym: str) -> int:
     """
@@ -183,7 +183,7 @@ def _list_positions_len(client: TradingClient) -> int:
         poss = client.get_all_positions()
         return len(poss or [])
     except Exception as e:
-        logging.warning(f"list positions failed: {e}")
+        log(f"⚠️ list positions failed: {e}")
         return 0
 
 def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = ""):
@@ -191,31 +191,31 @@ def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = "")
     global STOP_TRADING
     STOP_TRADING = True
     try:
-        logging.error(f"[RiskGuard] *** HALTING TRADES: {reason} ***")
-        logging.info("[RiskGuard] Cancelling all open orders...")
+        log(f"❌ [RiskGuard] *** HALTING TRADES: {reason} ***")
+        log(f"ℹ️ [RiskGuard] Cancelling all open orders...")
         _cancel_all_orders_robust(client)
 
-        logging.info("[RiskGuard] Closing all positions at market...")
+        log(f"ℹ️ [RiskGuard] Closing all positions at market...")
         try:
             client.close_all_positions(cancel_orders=True)
         except TypeError:
             # if older signature without keyword
             client.close_all_positions(True)
         except Exception as e:
-            logging.exception(f"[RiskGuard] close_all_positions error: {e}")
+            log(f"💥 [RiskGuard] close_all_positions error: {e}")
 
         deadline = time.time() + 45
         while time.time() < deadline:
             remaining = _list_positions_len(client)
             if remaining == 0:
-                logging.info("[RiskGuard] All positions closed.")
+                log(f"ℹ️ [RiskGuard] All positions closed.")
                 break
-            logging.info(f"[RiskGuard] Waiting for {remaining} positions to close...")
+            log(f"ℹ️ [RiskGuard] Waiting for {remaining} positions to close...")
             time.sleep(3)
 
-        logging.error("[RiskGuard] Exiting process due to daily P/L breach.")
+        log(f"❌ [RiskGuard] Exiting process due to daily P/L breach.")
     except Exception as e:
-        logging.exception(f"[RiskGuard] Error during liquidation: {e}")
+        log(f"💥 [RiskGuard] Error during liquidation: {e}")
     finally:
         try:
             for h in logging.getLogger().handlers:
@@ -306,7 +306,7 @@ def scheduled_shutdown_guard_check(client: TradingClient):
     try:
         shutdown_hour, shutdown_minute = map(int, shutdown_time_str.split(":"))
     except Exception:
-        logging.error(f"Invalid CRON_SHUTDOWN value: {shutdown_time_str}")
+        log(f"❌ Invalid CRON_SHUTDOWN value: {shutdown_time_str}")
         return
 
     now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
@@ -318,7 +318,7 @@ def scheduled_shutdown_guard_check(client: TradingClient):
     _last_shutdown_check_minute = minute_key
 
     if now_pt.hour == shutdown_hour and now_pt.minute == shutdown_minute:
-        logging.warning(f"[ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT")
+        log(f"⚠️ [ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT")
         trigger_global_liquidation_and_exit(
             client,
             reason=f"Scheduled shutdown at {shutdown_time_str} PT"
@@ -326,12 +326,12 @@ def scheduled_shutdown_guard_check(client: TradingClient):
 
     try:
         daily_pl = get_daily_pl(client)
-        logging.info(f"[RiskGuard] Daily P/L: {daily_pl:.2f} (threshold {NEGATIVE_PL_THRESHOLD:.2f})")
+        log(f"ℹ️ [RiskGuard] Daily P/L: {daily_pl:.2f} (threshold {NEGATIVE_PL_THRESHOLD:.2f})")
         if daily_pl <= NEGATIVE_PL_THRESHOLD:
-            logging.error(f"[RiskGuard] BREACH: {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
+            log(f"❌ [RiskGuard] BREACH: {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
             trigger_global_liquidation_and_exit(client, reason=f"Daily P/L {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
     except Exception as e:
-        logging.exception(f"[RiskGuard] Failed to compute daily P/L: {e}")
+        log(f"💥 [RiskGuard] Failed to compute daily P/L: {e}")
 
 
  
@@ -435,7 +435,7 @@ async def handle_bar(bar: dict):
 async def main():
     for sym in SYMBOLS:
         bootstrap_history(sym)
-    log("🚀 Connecting to real-time stream...")
+    log(f"🚀 Connecting to real-time stream...")
     async with websockets.connect(WS_URL) as ws:
         await ws.send(json.dumps({'action':'auth','key':API_KEY,'secret':SECRET_KEY}))
         await ws.recv()
@@ -455,6 +455,6 @@ async def main():
                     ap = m.get('ap', 0.0)
                     latest_quote[sym_q] = (bp, ap)
                     # log(f"💬 QUOTE {sym_q}: bid={bp:.2f}, ask={ap:.2f}")
-
+    
 if __name__ == '__main__':
     asyncio.run(main())
