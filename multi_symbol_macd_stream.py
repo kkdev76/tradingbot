@@ -249,6 +249,23 @@ def fetch_quote(sym: str) -> tuple:
     return latest_quote.get(sym, (0.0, 0.0))
 
 # Bootstrap historical bars
+# === Technical Indicators ===
+def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute MACD and Signal line on a DataFrame with a 'close' column.
+    Adds columns: 'macd' and 'macd_signal' and returns the DataFrame.
+    """
+    # Use standard 12/26/9 EMA configuration
+    exp1 = df['close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['close'].ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    sig = macd.ewm(span=9, adjust=False).mean()
+    out = df.copy()
+    out['macd'] = macd
+    out['macd_signal'] = sig
+    return out
+
+
 def bootstrap_history(sym: str):
     end = datetime.now(timezone.utc)
     start = end - timedelta(minutes=120)
@@ -317,9 +334,7 @@ def scheduled_shutdown_guard_check(client: TradingClient):
         logging.exception(f"[RiskGuard] Failed to compute daily P/L: {e}")
 
 
-# ===== Scheduled Shutdown (Pacific Time) =====
-from zoneinfo import ZoneInfo  # ensure available for timezone-aware comparison
-_last_shutdown_check_minute = None
+ 
 
 async def handle_bar(bar: dict):
     sym = bar['S']
@@ -330,6 +345,8 @@ async def handle_bar(bar: dict):
     # ===== Scheduled Shutdown: check once per minute =====
     scheduled_shutdown_guard_check(trading_client)
     # ===== Scheduled Shutdown: check once per minute =====
+
+
     ts = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
     # Append bar and compute MACD
     row = {'timestamp': ts, 'open': bar['o'], 'high': bar['h'], 'low': bar['l'], 'close': bar['c'], 'volume': bar['v']}
@@ -441,7 +458,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
-# ===================== BEGIN SCHEDULED SHUTDOWN GUARD =====================
-_shutdown_check_minute = None
-_shutdown_fired_date = None
