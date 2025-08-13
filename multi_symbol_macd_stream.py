@@ -67,25 +67,6 @@ def _load_negative_pl_threshold() -> float:
         val = -abs(val)
     return val
 
-def _get_macd_neutral_threshold(sym: str) -> float:
-    """
-    Returns the neutral-band threshold for MACD (±threshold) for a given symbol,
-    read from environment variables. Priority:
-      1) MACD_NEUTRAL_<SYMBOL> (e.g., MACD_NEUTRAL_AAPL=0.18)
-      2) MACD_NEUTRAL_DEFAULT (fallback for all symbols)
-      3) 0.2 (hardcoded fallback to preserve previous behavior)
-    """
-    key_specific = f"MACD_NEUTRAL_{sym.upper()}"
-    key_generic = "MACD_NEUTRAL_DEFAULT"
-    raw = os.getenv(key_specific) or os.getenv(key_generic) or "0.2"
-    try:
-        val = float(raw)
-    except Exception:
-        log(f"⚠️ Invalid {key_specific}/{key_generic} value: '{raw}'. Falling back to 0.2")
-        val = 0.2
-    return abs(val)
-
-
 NEGATIVE_PL_THRESHOLD = _load_negative_pl_threshold()
 
 # Alpaca client
@@ -98,6 +79,32 @@ tracked_macd = {sym: None for sym in SYMBOLS}
 last_trade_time = {sym: datetime.min.replace(tzinfo=timezone.utc) for sym in SYMBOLS}
 # Live quote cache (bid, ask) updated from websocket
 latest_quote = {sym: (0.0, 0.0) for sym in SYMBOLS}
+_macd_neutral_cache = {}
+
+def _get_macd_neutral_threshold(sym: str) -> float:
+    """
+    Returns the neutral-band threshold for MACD (±threshold) for a given symbol,
+    read from environment variables. Expected key: MACD_NEUTRAL_<SYMBOL> (e.g., MACD_NEUTRAL_AMD=0.2).
+    Falls back to MACD_NEUTRAL_DEFAULT, else 0.2.
+    Cached per symbol to avoid repeated env lookups.
+    """
+    key_specific = f"MACD_NEUTRAL_{sym.upper()}"
+    if sym in _macd_neutral_cache:
+        return _macd_neutral_cache[sym]
+    raw = os.getenv(key_specific)
+    if raw is None:
+        raw = os.getenv("MACD_NEUTRAL_DEFAULT", "0.2")
+        # Only log once per symbol for missing specific key
+        log(f"⚙️ {key_specific} not set; using MACD_NEUTRAL_DEFAULT={raw}")
+    try:
+        val = float(raw)
+    except Exception:
+        log(f"⚠️ Invalid neutral threshold for {sym}: '{raw}'. Falling back to 0.2")
+        val = 0.2
+    val = abs(val)
+    _macd_neutral_cache[sym] = val
+    return val
+
 
 # ===== Risk Guard state & helpers =====
 STOP_TRADING = False
@@ -120,6 +127,56 @@ def _cancel_all_orders_robust(client: TradingClient):
         client.cancel_all_orders()
     except Exception as e:
         logging.warning(f"Failed to cancel orders via API: {e}")
+
+def _cancel_open_orders_for_symbol(client: TradingClient, sym: str) -> int:
+    """
+    Cancel any active/unfilled orders for a given symbol.
+    Returns the number of orders successfully canceled.
+    """
+    cancelled = 0
+    orders = None
+    # Try multiple ways to fetch open/active orders
+    try:
+        orders = client.get_orders(status=getattr(OrderStatus, "OPEN", "open"))
+    except Exception:
+        try:
+            orders = client.get_orders(status="open")
+        except Exception as e2:
+            log(f"❌ Unable to fetch open orders for cleanup on {sym}: {e2}")
+            return 0
+
+    actionable_statuses = {"new", "accepted", "open", "partially_filled", "pending_new", "accepted_for_bidding"}
+    for o in (orders or []):
+        try:
+            o_symbol = getattr(o, "symbol", getattr(o, "asset_symbol", None))
+            if o_symbol != sym:
+                continue
+            o_status = str(getattr(o, "status", "")).lower()
+            if o_status not in actionable_statuses:
+                continue
+
+            oid = getattr(o, "id", getattr(o, "order_id", None))
+            if not oid:
+                continue
+
+            try:
+                if hasattr(client, "cancel_order_by_id"):
+                    client.cancel_order_by_id(oid)
+                elif hasattr(client, "cancel_order"):
+                    client.cancel_order(oid)
+                else:
+                    _cancel_all_orders_robust(client)
+                cancelled += 1
+                log(f"🧹 Canceled stale open order for {sym} (id={oid}, status={o_status})")
+            except Exception as ce:
+                log(f"❌ Failed to cancel order {oid} for {sym}: {ce}")
+        except Exception as ie:
+            log(f"❌ Error while scanning order for {sym}: {ie}")
+
+    if cancelled > 0:
+        log(f"🧹 Cleanup complete for {sym}: canceled {cancelled} stale open order(s)")
+    return cancelled
+
 
 def _list_positions_len(client: TradingClient) -> int:
     try:
@@ -185,6 +242,37 @@ from zoneinfo import ZoneInfo
 
 _last_shutdown_check_minute = None
 
+
+
+def fetch_quote(sym: str) -> tuple:
+    """Return the most recent bid and ask from the websocket cache."""
+    return latest_quote.get(sym, (0.0, 0.0))
+
+# Bootstrap historical bars
+def bootstrap_history(sym: str):
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(minutes=120)
+    bars = requests.get(
+        f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
+        headers={'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': SECRET_KEY},
+        params={
+            'timeframe': '1Min',
+            'start': start.isoformat().replace('+00:00','Z'),
+            'end': end.isoformat().replace('+00:00','Z'),
+            'limit': 120
+        }
+    ).json().get('bars', [])
+    if not bars:
+        log(f"⚠️ No history for {sym}")
+        return
+    df = pd.DataFrame([{ 
+        'timestamp': pd.to_datetime(b['t']).replace(tzinfo=timezone.utc),
+        'open': b['o'], 'high': b['h'], 'low': b['l'], 'close': b['c'], 'volume': b['v']
+    } for b in bars])
+    dfs[sym] = compute_macd(df)
+    log(f"✅ {sym}: bootstrapped {len(df)} bars.")
+
+# Real-time bar handling
 def scheduled_shutdown_guard_check(client: TradingClient):
     """
     At CRON_SHUTDOWN time (PST/PDT), cancel all orders, liquidate, and exit.
@@ -233,73 +321,6 @@ def scheduled_shutdown_guard_check(client: TradingClient):
 from zoneinfo import ZoneInfo  # ensure available for timezone-aware comparison
 _last_shutdown_check_minute = None
 
-def scheduled_shutdown_guard_check(client: TradingClient):
-    """At CRON_SHUTDOWN time (PST/PDT), cancel all orders, liquidate, and exit.
-    CRON_SHUTDOWN format: 'HH:MM' (24h). Interpreted in America/Los_Angeles regardless of server TZ.
-    """
-    global _last_shutdown_check_minute, STOP_TRADING
-    if STOP_TRADING:
-        return  # already halted
-
-    shutdown_time_str = (os.getenv("CRON_SHUTDOWN") or "").strip()
-    if not shutdown_time_str:
-        return  # disabled
-
-    try:
-        shutdown_hour, shutdown_minute = map(int, shutdown_time_str.split(":"))
-    except Exception:
-        logging.error(f"Invalid CRON_SHUTDOWN value: {shutdown_time_str}. Expected HH:MM (24h)." )
-        return
-
-    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
-    minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
-    if _last_shutdown_check_minute == minute_key:
-        return  # already checked this minute
-    _last_shutdown_check_minute = minute_key
-
-    if now_pt.hour == shutdown_hour and now_pt.minute == shutdown_minute:
-        logging.warning(f"[ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT" )
-        trigger_global_liquidation_and_exit(client, reason=f"Scheduled shutdown at {shutdown_time_str} PT")
-
-# Utility functions
-def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
-    exp1 = df['close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close'].ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
-    sig = macd.ewm(span=9, adjust=False).mean()
-    df['macd'] = macd
-    df['macd_signal'] = sig
-    return df
-
-def fetch_quote(sym: str) -> tuple:
-    """Return the most recent bid and ask from the websocket cache."""
-    return latest_quote.get(sym, (0.0, 0.0))
-
-# Bootstrap historical bars
-def bootstrap_history(sym: str):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(minutes=120)
-    bars = requests.get(
-        f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
-        headers={'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': SECRET_KEY},
-        params={
-            'timeframe': '1Min',
-            'start': start.isoformat().replace('+00:00','Z'),
-            'end': end.isoformat().replace('+00:00','Z'),
-            'limit': 120
-        }
-    ).json().get('bars', [])
-    if not bars:
-        log(f"⚠️ No history for {sym}")
-        return
-    df = pd.DataFrame([{ 
-        'timestamp': pd.to_datetime(b['t']).replace(tzinfo=timezone.utc),
-        'open': b['o'], 'high': b['h'], 'low': b['l'], 'close': b['c'], 'volume': b['v']
-    } for b in bars])
-    dfs[sym] = compute_macd(df)
-    log(f"✅ {sym}: bootstrapped {len(df)} bars.")
-
-# Real-time bar handling
 async def handle_bar(bar: dict):
     sym = bar['S']
 
@@ -309,9 +330,6 @@ async def handle_bar(bar: dict):
     # ===== Scheduled Shutdown: check once per minute =====
     scheduled_shutdown_guard_check(trading_client)
     # ===== Scheduled Shutdown: check once per minute =====
-    scheduled_shutdown_guard_check(trading_client)
-    scheduled_shutdown_guard_check(trading_client)
-    
     ts = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
     # Append bar and compute MACD
     row = {'timestamp': ts, 'open': bar['o'], 'high': bar['h'], 'low': bar['l'], 'close': bar['c'], 'volume': bar['v']}
@@ -354,8 +372,17 @@ async def handle_bar(bar: dict):
 
     # BUY logic with cooldown
     if pos == 0:
+        # If a BUY was placed earlier but never filled, there could be open/working orders.
+        # Proactively cancel any such orders for this symbol and reset tracking vars.
+        stale = _cancel_open_orders_for_symbol(trading_client, sym)
+        if stale > 0:
+            tracked_macd[sym] = None
+            last_trade_time[sym] = datetime.min.replace(tzinfo=timezone.utc)
+            log(f"🔄 Reset tracked_macd and last_trade_time after canceling {stale} stale order(s) for {sym}")
+
+        
         gap_pct = (abs(abs(macd)-abs(sig))/abs(sig))*100 if sig else 0
-        log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Gap={gap_pct:.2f} Threshold={PERCENT_THRESHOLD*100}")
+        log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f},Gap={gap_pct:.2f}, Threshold={PERCENT_THRESHOLD}")
         if macd > sig and  gap_pct > PERCENT_THRESHOLD*100:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
@@ -364,11 +391,10 @@ async def handle_bar(bar: dict):
                 log(f"⏳ Skipping BUY for {sym}: cooldown active")
                 return
             threshold = _get_macd_neutral_threshold(sym)
-            log(f"Guard Band for for {sym}: {threshold}  ")
             if -threshold < macd < threshold:
                 log(f"⏳ MACD in uncertainty zone for {sym}: |MACD|={abs(macd):.4f} < {threshold:.4f}; skipping buy")
                 return
-             
+            
             bid, _ = fetch_quote(sym)
             limit = round(bid + 0.01, 2)
 
@@ -419,24 +445,3 @@ if __name__ == '__main__':
 # ===================== BEGIN SCHEDULED SHUTDOWN GUARD =====================
 _shutdown_check_minute = None
 _shutdown_fired_date = None
-
-def scheduled_shutdown_guard_check(client: TradingClient):
-    """At 12:55 PM America/Los_Angeles each day, liquidate and exit."""
-    global _shutdown_check_minute, _shutdown_fired_date, STOP_TRADING
-    if STOP_TRADING:
-        return
-    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
-    minute_key = now_pt.strftime("%Y-%m-%d %H:%M PT")
-    if _shutdown_check_minute == minute_key:
-        return
-    _shutdown_check_minute = minute_key
-
-    # Only act once per day, at/after 12:55 PM PT
-    if _shutdown_fired_date == now_pt.date():
-        return
-
-    if (now_pt.hour, now_pt.minute) >= (12, 55):
-        logging.error(f"[ShutdownGuard] Triggering scheduled liquidation at {now_pt.strftime('%Y-%m-%d %H:%M %Z')}")
-        _shutdown_fired_date = now_pt.date()
-        trigger_global_liquidation_and_exit(client, reason="Scheduled daily shutdown at 12:55 PM PT")
-# ====================== END SCHEDULED SHUTDOWN GUARD =====================
