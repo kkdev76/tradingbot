@@ -170,15 +170,24 @@ def _cancel_open_orders_for_symbol(client: TradingClient, sym: str) -> int:
     """
     cancelled = 0
     orders = None
-    # Try multiple ways to fetch open/active orders
+    # Try multiple ways to fetch open/active orders (handle SDK version differences)
     try:
-        orders = client.get_orders(status=getattr(OrderStatus, "OPEN", "open"))
-    except Exception:
+        # Preferred: request-object API (newer Alpaca SDKs)
         try:
-            orders = client.get_orders(status="open")
-        except Exception as e2:
-            log(f"❌ Unable to fetch open orders for cleanup on {sym}: {e2}")
-            return 0
+            from alpaca.trading.requests import GetOrdersRequest  # type: ignore
+            try:
+                from alpaca.trading.enums import QueryOrderStatus  # type: ignore
+                req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            except Exception:
+                # Fallback: some SDKs accept string in request
+                req = GetOrdersRequest(status="open")
+            orders = client.get_orders(req)
+        except Exception:
+            # Fallback: older SDKs may not take params; fetch all and filter client-side
+            orders = client.get_orders()
+    except Exception as e2:
+        log(f"❌ Unable to fetch open orders for cleanup on {sym}: {e2}")
+        return 0
 
     actionable_statuses = {"new", "accepted", "open", "partially_filled", "pending_new", "accepted_for_bidding"}
     for o in (orders or []):
@@ -263,14 +272,18 @@ def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = "")
 
 def risk_guard_check(client: TradingClient):
     """Run at most once per minute. If daily P/L <= threshold, liquidate and exit."""
+    log(f"🛡️ [RiskGuard] Check start")
     global _last_pl_check_minute, STOP_TRADING
     if STOP_TRADING:
+        log(f"🛑 [RiskGuard] Trading halted; skipping risk check")
         return
     now = datetime.now(timezone.utc)
     minute_key = now.strftime("%Y-%m-%d %H:%M")
     if _last_pl_check_minute == minute_key:
+        log(f"⏭️ [RiskGuard] Already checked this minute ({minute_key}); skipping")
         return
     _last_pl_check_minute = minute_key
+    log(f"✅ [RiskGuard] Marked risk check at {minute_key}")
 
 
 from zoneinfo import ZoneInfo
@@ -331,15 +344,20 @@ def scheduled_shutdown_guard_check(client: TradingClient):
     """
     global _last_shutdown_check_minute, STOP_TRADING
 
+    log(f"🕒 [ShutdownGuard] Check start")
+
     if STOP_TRADING:
+        log(f"🛑 [ShutdownGuard] Trading halted; skipping shutdown check")
         return  # Already halted
 
     shutdown_time_str = os.getenv("CRON_SHUTDOWN", "").strip()
     if not shutdown_time_str:
+        log(f"⏭️ [ShutdownGuard] CRON_SHUTDOWN not set; skipping")
         return  # Disabled if not set
 
     try:
         shutdown_hour, shutdown_minute = map(int, shutdown_time_str.split(":"))
+        log(f"✅ [ShutdownGuard] Parsed shutdown time {shutdown_hour:02d}:{shutdown_minute:02d} PT")
     except Exception:
         log(f"❌ Invalid CRON_SHUTDOWN value: {shutdown_time_str}")
         return
@@ -349,8 +367,10 @@ def scheduled_shutdown_guard_check(client: TradingClient):
 
     # Avoid repeating shutdown check more than once per minute
     if _last_shutdown_check_minute == minute_key:
+        log(f"⏭️ [ShutdownGuard] Already checked at {minute_key}; skipping")
         return
     _last_shutdown_check_minute = minute_key
+    log(f"✅ [ShutdownGuard] Marked shutdown check at {minute_key}")
 
     if now_pt.hour == shutdown_hour and now_pt.minute == shutdown_minute:
         log(f"⚠️ [ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT")
@@ -358,6 +378,8 @@ def scheduled_shutdown_guard_check(client: TradingClient):
             client,
             reason=f"Scheduled shutdown at {shutdown_time_str} PT"
         )
+    else:
+        log(f"🕒 [ShutdownGuard] Not shutdown time yet (now {now_pt.strftime('%H:%M')} PT)")
 
     try:
         daily_pl = get_daily_pl(client)
@@ -365,6 +387,8 @@ def scheduled_shutdown_guard_check(client: TradingClient):
         if daily_pl <= NEGATIVE_PL_THRESHOLD:
             log(f"❌ [RiskGuard] BREACH: {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
             trigger_global_liquidation_and_exit(client, reason=f"Daily P/L {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
+        else:
+            log(f"✅ [RiskGuard] P/L above threshold; continuing")
     except Exception as e:
         log(f"💥 [RiskGuard] Failed to compute daily P/L: {e}")
 
@@ -373,11 +397,19 @@ def scheduled_shutdown_guard_check(client: TradingClient):
 
 async def handle_bar(bar: dict):
     sym = bar['S']
+    # Entry log for this bar processing
+    try:
+        ts_dbg = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
+        log(f"🧭 handle_bar start for {sym} at {ts_dbg.isoformat()}")
+    except Exception:
+        log(f"🧭 handle_bar start for {sym} (timestamp parse failed)")
 
     # ===== Guards: run once per minute =====
+    log(f"🛡️ Running risk_guard_check for {sym}")
     risk_guard_check(trading_client)
     
     # ===== Scheduled Shutdown: check once per minute =====
+    log(f"🕒 Running scheduled_shutdown_guard_check for {sym}")
     scheduled_shutdown_guard_check(trading_client)
     # ===== Scheduled Shutdown: check once per minute =====
 
@@ -412,6 +444,7 @@ async def handle_bar(bar: dict):
 
     # SELL/HOLD logic
     if tracked_macd[sym] is not None:
+        log(f"🧮 Path: SELL/HOLD evaluation for {sym}")
         log(f"Checking SELL/HOLD for {sym}: current MACD={macd:.4f}, tracked={tracked_macd[sym]:.4f}")
         if macd > tracked_macd[sym]:
             log(f"🔼 HOLD {sym}: MACD rose {tracked_macd[sym]:.4f} → {macd:.4f}")
@@ -427,10 +460,12 @@ async def handle_bar(bar: dict):
                 last_trade_time[sym] = datetime.now(timezone.utc)
                 log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
             tracked_macd[sym] = None
+        log(f"🧭 Path exit: SELL/HOLD evaluation complete for {sym}")
         return
 
     # BUY logic with cooldown
     if pos == 0:
+        log(f"🧮 Path: BUY evaluation for {sym}")
         # If a BUY was placed earlier but never filled, there could be open/working orders.
         # Proactively cancel any such orders for this symbol and reset tracking vars.
         stale = _cancel_open_orders_for_symbol(trading_client, sym)
@@ -438,6 +473,8 @@ async def handle_bar(bar: dict):
             tracked_macd[sym] = None
             last_trade_time[sym] = datetime.min.replace(tzinfo=timezone.utc)
             log(f"🔄 Reset tracked_macd and last_trade_time after canceling {stale} stale order(s) for {sym}")
+        else:
+            log(f"🧹 No stale open orders to cancel for {sym}")
 
         
         gap_pct = (abs(abs(macd)-abs(sig))/abs(sig))*100 if sig else 0
@@ -471,8 +508,12 @@ async def handle_bar(bar: dict):
         elif macd > sig:
              
             log(f"⚪️ {sym}: MACD>sig but gap {gap_pct:.1f}% < {PERCENT_THRESHOLD*100:.1f}%, skipping buy")
+        else:
+            log(f"⚪️ {sym}: MACD<=Signal ({macd:.4f} <= {sig:.4f}); skipping buy")
+        log(f"🧭 Path exit: BUY evaluation complete for {sym}")
     else:
         log(f"⚪️ Skipping buy for {sym}: existing position of {pos} shares")
+    log(f"🏁 handle_bar end for {sym}")
 
 
 # Main loop
