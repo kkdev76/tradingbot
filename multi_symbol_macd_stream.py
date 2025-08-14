@@ -59,6 +59,7 @@ def _load_negative_pl_threshold() -> float:
         return -250.0
     try:
         val = float(raw)
+        log(f"STOP LOSS THRESHOLD RETRIEVED :: {val}")
     except Exception:
         log(f"❌ Invalid NEGATIVE_PL_THRESHOLD value: {raw}. Falling back to -250.00")
         return -250.0
@@ -80,6 +81,40 @@ last_trade_time = {sym: datetime.min.replace(tzinfo=timezone.utc) for sym in SYM
 # Live quote cache (bid, ask) updated from websocket
 latest_quote = {sym: (0.0, 0.0) for sym in SYMBOLS}
 _macd_neutral_cache = {}
+
+# MACD buffer for trend analysis - stores last 3 MACD values for each symbol
+macd_buffer = {sym: [] for sym in SYMBOLS}
+MACD_BUFFER_SIZE = 3
+
+def update_macd_buffer(sym: str, macd_value: float):
+    """
+    Update the MACD buffer for a symbol with a new value.
+    Maintains a fixed-size buffer by evicting oldest value when full.
+    """
+    if sym not in macd_buffer:
+        macd_buffer[sym] = []
+    
+    buffer = macd_buffer[sym]
+    buffer.append(macd_value)
+    
+    # Keep only the last MACD_BUFFER_SIZE values
+    if len(buffer) > MACD_BUFFER_SIZE:
+        buffer.pop(0)  # Remove oldest value
+    
+    macd_buffer[sym] = buffer
+
+def is_macd_monotonically_increasing(sym: str) -> bool:
+    """
+    Check if the last 3 MACD values in the buffer are monotonically increasing.
+    Returns True if current > previous > previous_previous, False otherwise.
+    Requires at least 3 values in buffer to return True.
+    """
+    buffer = macd_buffer.get(sym, [])
+    if len(buffer) < MACD_BUFFER_SIZE:
+        return False
+    
+    # Check if values are strictly increasing: buffer[2] > buffer[1] > buffer[0]
+    return buffer[2] > buffer[1] > buffer[0]
 
 def _get_macd_neutral_threshold(sym: str) -> float:
     """
@@ -353,7 +388,14 @@ async def handle_bar(bar: dict):
     df = pd.concat([dfs[sym], pd.DataFrame([row])], ignore_index=True).tail(1000)
     dfs[sym] = df = compute_macd(df)
     macd, sig = df.iloc[-1]['macd'], df.iloc[-1]['macd_signal']
+    
+    # Update MACD buffer and check trend
+    update_macd_buffer(sym, macd)
+    is_increasing = is_macd_monotonically_increasing(sym)
+    buffer_values = macd_buffer[sym]
+    
     log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}")
+    log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
 
     # Position check
     try:
@@ -380,7 +422,7 @@ async def handle_bar(bar: dict):
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked SELL {sym} x{pos} (trading halted)")
                     return
-                log(f"🔴 SELL {sym}: MACD dropped to {macd:.4f} ≤ tracked {tracked_macd[sym]:.4f}, selling {pos} @ {bid:.2f}")
+                log(f"🔴🔴🔴 SELL {sym}: MACD dropped to {macd:.4f} ≤ tracked {tracked_macd[sym]:.4f}, selling {pos} @ {bid:.2f}🔴🔴🔴")
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
                 log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
@@ -418,12 +460,14 @@ async def handle_bar(bar: dict):
             if STOP_TRADING:
                 log(f"[RiskGuard] Blocked BUY {sym} (trading halted)")
                 return
-            
-            log(f"🟢 BUY {sym}: MACD:{macd}, Signal:{sig}  {macd:.4f}>{sig:.4f}, gap {gap_pct:.1f}% ≥ {PERCENT_THRESHOLD*100:.1f}% → buying @ {limit:.2f}")
-            place_buy(sym, limit, remaining_budget[sym])
-            tracked_macd[sym] = macd
-            last_trade_time[sym] = now
-            log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
+            if is_increasing:
+                log(f"🟢🟢🟢 BUY {sym}: MACD:{macd}, Signal:{sig}  {macd:.4f}>{sig:.4f}, gap {gap_pct:.1f}% ≥ {PERCENT_THRESHOLD*100:.1f}% → buying @ {limit:.2f}🟢🟢🟢")
+                place_buy(sym, limit, remaining_budget[sym])
+                tracked_macd[sym] = macd
+                last_trade_time[sym] = now
+                log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
+            else: 
+                log(f"💀💀💀 All Checks Passed for BUY {sym} but MACD is not increasing so skipping buy💀💀💀")     
         elif macd > sig:
              
             log(f"⚪️ {sym}: MACD>sig but gap {gap_pct:.1f}% < {PERCENT_THRESHOLD*100:.1f}%, skipping buy")
