@@ -257,7 +257,7 @@ def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = "")
             log(f"ℹ️ [RiskGuard] Waiting for {remaining} positions to close...")
             time.sleep(3)
 
-        log(f"❌ [RiskGuard] Exiting process due to daily P/L breach.")
+        log(f"❌ [RiskGuard] Exiting process. Reason: {reason or 'N/A'}")
     except Exception as e:
         log(f"💥 [RiskGuard] Error during liquidation: {e}")
     finally:
