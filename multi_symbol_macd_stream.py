@@ -450,15 +450,16 @@ async def handle_bar(bar: dict):
             log(f"🔼 HOLD {sym}: MACD rose {tracked_macd[sym]:.4f} → {macd:.4f}")
             tracked_macd[sym] = macd
         else:
-            bid, _ = fetch_quote(sym)
+           
             if pos > 0:
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked SELL {sym} x{pos} (trading halted)")
                     return
                 log(f"🔴🔴🔴 SELL {sym}: MACD dropped to {macd:.4f} ≤ tracked {tracked_macd[sym]:.4f}, selling {pos} @ {bid:.2f}🔴🔴🔴")
+                bid, _ = fetch_quote(sym)
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
-                log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
+                log(f"Sold {sym} Updated last_trade_time for {sym} to {last_trade_time[sym]}")
             tracked_macd[sym] = None
         log(f"🧭 Path exit: SELL/HOLD evaluation complete for {sym}")
         return
