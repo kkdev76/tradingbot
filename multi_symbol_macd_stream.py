@@ -400,7 +400,7 @@ async def handle_bar(bar: dict):
     # Entry log for this bar processing
     try:
         ts_dbg = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
-        log(f"🧭 handle_bar start for {sym} at {ts_dbg.isoformat()}")
+        log(f"🧭========  handle_bar start for {sym} at {ts_dbg.isoformat()}")
     except Exception:
         log(f"🧭 handle_bar start for {sym} (timestamp parse failed)")
 
@@ -491,13 +491,14 @@ async def handle_bar(bar: dict):
                 log(f"⏳ MACD in uncertainty zone for {sym}: |MACD|={abs(macd):.4f} < {threshold:.4f}; skipping buy")
                 return
             
-            bid, _ = fetch_quote(sym)
-            limit = round(bid + 0.01, 2)
-
+            
             if STOP_TRADING:
                 log(f"[RiskGuard] Blocked BUY {sym} (trading halted)")
                 return
+
             if is_increasing:
+                bid, _ = fetch_quote(sym)
+                limit = round(bid + 0.01, 2)
                 log(f"🟢🟢🟢 BUY {sym}: MACD:{macd}, Signal:{sig}  {macd:.4f}>{sig:.4f}, gap {gap_pct:.1f}% ≥ {PERCENT_THRESHOLD*100:.1f}% → buying @ {limit:.2f}🟢🟢🟢")
                 place_buy(sym, limit, remaining_budget[sym])
                 tracked_macd[sym] = macd
@@ -513,7 +514,7 @@ async def handle_bar(bar: dict):
         log(f"🧭 Path exit: BUY evaluation complete for {sym}")
     else:
         log(f"⚪️ Skipping buy for {sym}: existing position of {pos} shares")
-    log(f"🏁 handle_bar end for {sym}")
+    log(f"🏁 ========= handle_bar end for {sym}")
 
 
 # Main loop
@@ -533,6 +534,7 @@ async def main():
             for m in data:
                 msg_type = m.get('T')
                 if msg_type == 'b':
+                    
                     await handle_bar(m)
                 elif msg_type == 'q':  # quote update
                     sym_q = m.get('S')
@@ -542,4 +544,9 @@ async def main():
                     # log(f"💬 QUOTE {sym_q}: bid={bp:.2f}, ask={ap:.2f}")
     
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main()) # run the main loop
+    except Exception as e:
+        log(f"💥 Main loop crashed: {e}")
+        sys.exit(1)
+    
