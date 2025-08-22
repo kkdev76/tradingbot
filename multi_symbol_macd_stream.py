@@ -442,10 +442,72 @@ async def handle_bar(bar: dict):
             log(f"⚠️ Could not fetch position for {sym}: {err}")
         pos = 0
 
+    # Check for pending sell orders and convert to market sell if needed
+    if pos > 0:
+        try:
+            # Get open orders for THIS symbol only
+            orders = None
+            try:
+                from alpaca.trading.requests import GetOrdersRequest
+                try:
+                    from alpaca.trading.enums import QueryOrderStatus
+                    req = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbol=sym)
+                except Exception:
+                    req = GetOrdersRequest(status="open", symbol=sym)
+                orders = trading_client.get_orders(req)
+            except Exception:
+                # Fallback: try to filter by symbol if the request approach fails
+                try:
+                    all_orders = trading_client.get_orders()
+                    orders = [o for o in all_orders if getattr(o, "symbol", getattr(o, "asset_symbol", None)) == sym]
+                except Exception:
+                    orders = []
+            
+            # Look for sell orders for this symbol
+            pending_sell_orders = []
+            for order in (orders or []):
+                try:
+                    order_side = getattr(order, "side", "").lower()
+                    if order_side == "sell":
+                        pending_sell_orders.append(order)
+                except Exception:
+                    continue
+            
+            # If we have pending sell orders, cancel them and place market sell
+            if pending_sell_orders:
+                log(f"🔄 {sym}: Found {len(pending_sell_orders)} pending sell order(s), converting to market sell")
+                
+                # Cancel all pending sell orders
+                for order in pending_sell_orders:
+                    try:
+                        order_id = getattr(order, "id", getattr(order, "order_id", None))
+                        if order_id:
+                            if hasattr(trading_client, "cancel_order_by_id"):
+                                trading_client.cancel_order_by_id(order_id)
+                            elif hasattr(trading_client, "cancel_order"):
+                                trading_client.cancel_order(order_id)
+                            log(f"🧹 Canceled sell order {order_id} for {sym}")
+                    except Exception as e:
+                        log(f"❌ Failed to cancel sell order for {sym}: {e}")
+                
+                # Place market sell order for the current position
+                try:
+                    bid, _ = fetch_quote(sym)
+                    log(f"🔴 Market sell {sym}: {pos} shares @ market")
+                    place_sell(sym, bid, pos)
+                    last_trade_time[sym] = datetime.now(timezone.utc)
+                    tracked_macd[sym] = None
+                    log(f"✅ Market sell placed for {sym}, updated tracking")
+                    return  # Exit early since we've handled the sell
+                except Exception as e:
+                    log(f"❌ Failed to place market sell for {sym}: {e}")
+            
+        except Exception as e:
+            log(f"⚠️ Error checking pending sell orders on {sym}: {e}")
+
     # SELL/HOLD logic
     if tracked_macd[sym] is not None:
-        log(f"🧮 Path: SELL/HOLD evaluation for {sym}")
-        log(f"Checking SELL/HOLD for {sym}: current MACD={macd:.4f}, tracked={tracked_macd[sym]:.4f}")
+        log(f"🧮Checking SELL/HOLD for {sym}: current MACD={macd:.4f}, tracked={tracked_macd[sym]:.4f}")
         if macd > tracked_macd[sym]:
             log(f"🔼 HOLD {sym}: MACD rose {tracked_macd[sym]:.4f} → {macd:.4f}")
             tracked_macd[sym] = macd
