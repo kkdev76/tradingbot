@@ -451,7 +451,6 @@ async def handle_bar(bar: dict):
                 from alpaca.trading.requests import GetOrdersRequest
                 try:
                     from alpaca.trading.enums import QueryOrderStatus
-                    from datetime import datetime, timezone
                     # Get current date in UTC (Alpaca uses UTC)
                     today = datetime.now(timezone.utc).date()
                     req = GetOrdersRequest(
@@ -461,7 +460,6 @@ async def handle_bar(bar: dict):
                         until=today.isoformat() + "T23:59:59Z"   # End of today
                     )
                 except Exception:
-                    from datetime import datetime, timezone
                     # Get current date in UTC (Alpaca uses UTC)
                     today = datetime.now(timezone.utc).date()
                     req = GetOrdersRequest(
