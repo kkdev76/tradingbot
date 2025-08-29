@@ -1,7 +1,7 @@
 import os, time
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import LimitOrderRequest
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 from dotenv import load_dotenv
 
 load_dotenv("crypto.env")
@@ -53,3 +53,39 @@ def place_sell(symbol: str, ask_price: float, qty: int = None) -> int:
     orders = trading_client.get_orders()
     resp = next((o for o in orders if o.id == order.id), None)
     return int(float(resp.filled_qty)) if resp else 0
+
+
+def place_sell_market(symbol: str, qty: int = None) -> int:
+    """Sell given qty shares (or all if qty=None) as a MARKET order. Returns filled qty."""
+    if qty is None:
+        try:
+            position = trading_client.get_position(symbol)
+            qty = int(float(position.qty))
+        except Exception:
+            qty = 0
+    if qty < 1:
+        return 0
+
+    cancel_symbol_orders(symbol)
+
+    order_req = MarketOrderRequest(
+        symbol=symbol,
+        qty=qty,
+        side=OrderSide.SELL,
+        time_in_force=TimeInForce.DAY,
+    )
+    order = trading_client.submit_order(order_req)
+
+    time.sleep(3)
+    for _ in range(5):
+        orders = trading_client.get_orders()
+        resp = next((o for o in orders if o.id == order.id), None)
+        if resp:
+            filled = int(float(getattr(resp, "filled_qty", 0)))
+            if str(getattr(resp, "status", "")).lower() == "filled" or filled > 0:
+                return filled
+        time.sleep(1)
+
+    orders = trading_client.get_orders()
+    resp = next((o for o in orders if o.id == order.id), None)
+    return int(float(getattr(resp, "filled_qty", 0))) if resp else 0

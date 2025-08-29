@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from buy_order import place_buy
-from sell_order import place_sell
+from sell_order import place_sell, place_sell_market
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderStatus, OrderSide
 from alpaca.trading.requests import ClosePositionRequest
@@ -451,9 +451,25 @@ async def handle_bar(bar: dict):
                 from alpaca.trading.requests import GetOrdersRequest
                 try:
                     from alpaca.trading.enums import QueryOrderStatus
-                    req = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbol=sym)
+                    from datetime import datetime, timezone
+                    # Get current date in UTC (Alpaca uses UTC)
+                    today = datetime.now(timezone.utc).date()
+                    req = GetOrdersRequest(
+                        status=QueryOrderStatus.OPEN, 
+                        symbol=sym,
+                        after=today.isoformat() + "T00:00:00Z",  # Start of today
+                        until=today.isoformat() + "T23:59:59Z"   # End of today
+                    )
                 except Exception:
-                    req = GetOrdersRequest(status="open", symbol=sym)
+                    from datetime import datetime, timezone
+                    # Get current date in UTC (Alpaca uses UTC)
+                    today = datetime.now(timezone.utc).date()
+                    req = GetOrdersRequest(
+                        status="open", 
+                        symbol=sym,
+                        after=today.isoformat() + "T00:00:00Z",  # Start of today
+                        until=today.isoformat() + "T23:59:59Z"   # End of today
+                    )
                 orders = trading_client.get_orders(req)
             except Exception:
                 # Fallback: try to filter by symbol if the request approach fails
@@ -494,7 +510,7 @@ async def handle_bar(bar: dict):
                 try:
                     bid, _ = fetch_quote(sym)
                     log(f"🔴 Market sell {sym}: {pos} shares @ market")
-                    place_sell(sym, bid, pos)
+                    place_sell_market(sym, pos)
                     last_trade_time[sym] = datetime.now(timezone.utc)
                     tracked_macd[sym] = None
                     log(f"✅ Market sell placed for {sym}, updated tracking")
