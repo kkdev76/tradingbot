@@ -196,6 +196,9 @@ def _cancel_open_orders_for_symbol(client: TradingClient, sym: str) -> int:
             if o_symbol != sym:
                 continue
             o_status = str(getattr(o, "status", "")).lower()
+            # Handle enum status format (e.g., "orderstatus.new" -> "new")
+            if "." in o_status:
+                o_status = o_status.split(".")[-1]
             if o_status not in actionable_statuses:
                 continue
 
