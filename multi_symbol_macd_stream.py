@@ -275,7 +275,7 @@ def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = "")
 
 def risk_guard_check(client: TradingClient):
     """Run at most once per minute. If daily P/L <= threshold, liquidate and exit."""
-    log(f"🛡️ [RiskGuard] Check start")
+    # log(f"🛡️ [RiskGuard] Check start")
     global _last_pl_check_minute, STOP_TRADING
     if STOP_TRADING:
         log(f"🛑 [RiskGuard] Trading halted; skipping risk check")
@@ -283,10 +283,10 @@ def risk_guard_check(client: TradingClient):
     now = datetime.now(timezone.utc)
     minute_key = now.strftime("%Y-%m-%d %H:%M")
     if _last_pl_check_minute == minute_key:
-        log(f"⏭️ [RiskGuard] Already checked this minute ({minute_key}); skipping")
+        # log(f"⏭️ [RiskGuard] Already checked this minute ({minute_key}); skipping")
         return
     _last_pl_check_minute = minute_key
-    log(f"✅ [RiskGuard] Marked risk check at {minute_key}")
+    # log(f"✅ [RiskGuard] Marked risk check at {minute_key}")
 
 
 from zoneinfo import ZoneInfo
@@ -408,11 +408,11 @@ async def handle_bar(bar: dict):
         log(f"🧭 handle_bar start for {sym} (timestamp parse failed)")
 
     # ===== Guards: run once per minute =====
-    log(f"🛡️ Running risk_guard_check for {sym}")
+    # log(f"🛡️ Running risk_guard_check for {sym}")
     risk_guard_check(trading_client)
     
     # ===== Scheduled Shutdown: check once per minute =====
-    log(f"🕒 Running scheduled_shutdown_guard_check for {sym}")
+    # log(f"🕒 Running scheduled_shutdown_guard_check for {sym}")
     scheduled_shutdown_guard_check(trading_client)
     # ===== Scheduled Shutdown: check once per minute =====
 
@@ -546,7 +546,7 @@ async def handle_bar(bar: dict):
 
     # BUY logic with cooldown
     if pos == 0:
-        log(f"🧮 Path: BUY evaluation for {sym}")
+        # log(f"🧮 Path: BUY evaluation for {sym}")
         # If a BUY was placed earlier but never filled, there could be open/working orders.
         # Proactively cancel any such orders for this symbol and reset tracking vars.
         stale = _cancel_open_orders_for_symbol(trading_client, sym)
@@ -563,9 +563,9 @@ async def handle_bar(bar: dict):
         if macd > sig and  gap_pct > PERCENT_THRESHOLD*100:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
-            log(f"⏳ Cooldown check for {sym}: elapsed {elapsed:.1f} min (threshold {TRADE_COOLDOWN_MINUTES} min)")
+            # log(f"⏳ Cooldown check for {sym}: elapsed {elapsed:.1f} min (threshold {TRADE_COOLDOWN_MINUTES} min)")
             if elapsed < TRADE_COOLDOWN_MINUTES:
-                log(f"⏳ Skipping BUY for {sym}: cooldown active")
+                # log(f"⏳ Skipping BUY for {sym}: cooldown active")
                 return
             threshold = _get_macd_neutral_threshold(sym)
             if -threshold < macd < threshold:
@@ -589,12 +589,16 @@ async def handle_bar(bar: dict):
                 log(f"💀💀💀 All Checks Passed for BUY {sym} but MACD is not increasing so skipping buy💀💀💀")     
         elif macd > sig:
              
-            log(f"⚪️ {sym}: MACD>sig but gap {gap_pct:.1f}% < {PERCENT_THRESHOLD*100:.1f}%, skipping buy")
+            # log(f"⚪️ {sym}: MACD>sig but gap {gap_pct:.1f}% < {PERCENT_THRESHOLD*100:.1f}%, skipping buy")
+            pass
         else:
-            log(f"⚪️ {sym}: MACD<=Signal ({macd:.4f} <= {sig:.4f}); skipping buy")
-        log(f"🧭 Path exit: BUY evaluation complete for {sym}")
+            # log(f"⚪️ {sym}: MACD<=Signal ({macd:.4f} <= {sig:.4f}); skipping buy")
+            pass
+        # log(f"🧭 Path exit: BUY evaluation complete for {sym}")
+        pass
     else:
-        log(f"⚪️ Skipping buy for {sym}: existing position of {pos} shares")
+        # log(f"⚪️ Skipping buy for {sym}: existing position of {pos} shares")
+        pass
     log(f"🏁 ========= handle_bar end for {sym}")
 
 
