@@ -22,7 +22,7 @@ def place_buy(symbol: str, current_price: float, dollars: float) -> int:
     qty = int(dollars // current_price)
     if qty < 1:
         raise ValueError("Budget too small for even 1 share.")
-    limit_price = round(current_price + 0.05, 2)
+    limit_price = round(current_price + 0.01, 2)
     cancel_symbol_orders(symbol)
     order_req = LimitOrderRequest(
         symbol=symbol,
