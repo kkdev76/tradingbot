@@ -49,6 +49,7 @@ SECRET_KEY = os.getenv('APCA_API_SECRET_KEY')
 TRADE_COOLDOWN_MINUTES = int(os.getenv('MIN_TRADE_COOLDOWN_MINUTES', '9'))
 SYMBOLS = [s.strip().upper() for s in os.getenv('STOCK_LIST', 'AAPL').split(',')]
 PERCENT_THRESHOLD = float(os.getenv('PERCENT_THRESHOLD', '0.1'))
+PROFIT_TAKE_PERCENT = float(os.getenv('PROFIT_TAKE_PERCENT', '1.0'))
 WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 
 # ===== Risk Guard config =====
@@ -76,7 +77,6 @@ trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
 # State
 dfs = {sym: pd.DataFrame(columns=['timestamp','open','high','low','close','volume']) for sym in SYMBOLS}
 remaining_budget = {sym: float(os.getenv('DEFAULT_DOLLAR','0')) for sym in SYMBOLS}
-tracked_macd = {sym: None for sym in SYMBOLS}
 last_trade_time = {sym: datetime.min.replace(tzinfo=timezone.utc) for sym in SYMBOLS}
 # Live quote cache (bid, ask) updated from websocket
 latest_quote = {sym: (0.0, 0.0) for sym in SYMBOLS}
@@ -433,6 +433,7 @@ async def handle_bar(bar: dict):
     log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
 
     # Position check
+    pos_obj = None
     try:
         pos_obj = trading_client.get_open_position(sym)
         pos = int(float(pos_obj.qty))
@@ -513,7 +514,6 @@ async def handle_bar(bar: dict):
                     log(f"🔴 Market sell {sym}: {pos} shares @ market")
                     place_sell_market(sym, pos)
                     last_trade_time[sym] = datetime.now(timezone.utc)
-                    tracked_macd[sym] = None
                     log(f"✅ Market sell placed for {sym}, updated tracking")
                     return  # Exit early since we've handled the sell
                 except Exception as e:
@@ -522,26 +522,25 @@ async def handle_bar(bar: dict):
         except Exception as e:
             log(f"⚠️ Error checking pending sell orders on {sym}: {e}")
 
-    # SELL/HOLD logic
-    if tracked_macd[sym] is not None:
-        log(f"🧮Checking SELL/HOLD for {sym}: current MACD={macd:.4f}, tracked={tracked_macd[sym]:.4f}")
-        if macd > tracked_macd[sym]:
-            log(f"🔼 HOLD {sym}: MACD rose {tracked_macd[sym]:.4f} → {macd:.4f}")
-            tracked_macd[sym] = macd
-        else:
-            bid, _ = fetch_quote(sym)
-           
-            if pos > 0:
+    # TAKE-PROFIT logic
+    if pos > 0 and pos_obj is not None:
+        try:
+            unrealized_plpc = float(pos_obj.unrealized_plpc) * 100
+            log(f"💰 {sym} unrealized P&L: {unrealized_plpc:.2f}% (threshold {PROFIT_TAKE_PERCENT:.2f}%)")
+            if unrealized_plpc >= PROFIT_TAKE_PERCENT:
                 if STOP_TRADING:
-                    log(f"[RiskGuard] Blocked SELL {sym} x{pos} (trading halted)")
+                    log(f"[RiskGuard] Blocked TAKE-PROFIT SELL {sym} x{pos} (trading halted)")
                     return
-                log(f"🔴🔴🔴 SELL {sym}: MACD dropped to {macd:.4f} ≤ tracked {tracked_macd[sym]:.4f}, selling {pos} @ {bid:.2f}🔴🔴🔴")
-                
+                bid, _ = fetch_quote(sym)
+                log(f"🔴🔴🔴 TAKE-PROFIT {sym}: {unrealized_plpc:.2f}% >= {PROFIT_TAKE_PERCENT:.2f}%, selling {pos} @ {bid:.2f}🔴🔴🔴")
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
                 log(f"Sold {sym} Updated last_trade_time for {sym} to {last_trade_time[sym]}")
-            tracked_macd[sym] = None
-        log(f"🧭 Path exit: SELL/HOLD evaluation complete for {sym}")
+                return
+            else:
+                log(f"⏳ {sym}: holding position, profit {unrealized_plpc:.2f}% < {PROFIT_TAKE_PERCENT:.2f}%")
+        except Exception as e:
+            log(f"⚠️ Error checking profit for {sym}: {e}")
         return
 
     # BUY logic with cooldown
@@ -551,9 +550,8 @@ async def handle_bar(bar: dict):
         # Proactively cancel any such orders for this symbol and reset tracking vars.
         stale = _cancel_open_orders_for_symbol(trading_client, sym)
         if stale > 0:
-            tracked_macd[sym] = None
             last_trade_time[sym] = datetime.min.replace(tzinfo=timezone.utc)
-            log(f"🔄 Reset tracked_macd and last_trade_time after canceling {stale} stale order(s) for {sym}")
+            log(f"🔄 Reset last_trade_time after canceling {stale} stale order(s) for {sym}")
         else:
             log(f"🧹 No stale open orders to cancel for {sym}")
 
@@ -582,7 +580,6 @@ async def handle_bar(bar: dict):
                 limit = round(bid + 0.01, 2)
                 log(f"🟢🟢🟢 BUY {sym}: MACD:{macd}, Signal:{sig}  {macd:.4f}>{sig:.4f}, gap {gap_pct:.1f}% ≥ {PERCENT_THRESHOLD*100:.1f}% → buying @ {limit:.2f}🟢🟢🟢")
                 place_buy(sym, limit, remaining_budget[sym])
-                tracked_macd[sym] = macd
                 last_trade_time[sym] = now
                 log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
             else: 
