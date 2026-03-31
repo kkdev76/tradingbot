@@ -32,5 +32,9 @@ BOOTSTRAP_MAX_DAYS_BACK=5
 # Minimum bars required before enabling trading decisions (warm-up)
 MACD_WARMUP_BARS=78
 
-# Take-profit: sell when unrealized P&L % reaches this threshold
-PROFIT_TAKE_PERCENT=1.0
+# Take-profit: sell when unrealized P&L % reaches this threshold (per-symbol)
+PROFIT_TAKE_AMD=1.0
+PROFIT_TAKE_TSLA=1.5
+PROFIT_TAKE_MSFT=1.0
+PROFIT_TAKE_INTC=1.0
+PROFIT_TAKE_DEFAULT=1.0

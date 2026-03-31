@@ -50,7 +50,6 @@ SECRET_KEY = os.getenv('APCA_API_SECRET_KEY')
 TRADE_COOLDOWN_MINUTES = int(os.getenv('MIN_TRADE_COOLDOWN_MINUTES', '9'))
 SYMBOLS = [s.strip().upper() for s in os.getenv('STOCK_LIST', 'AAPL').split(',')]
 PERCENT_THRESHOLD = float(os.getenv('PERCENT_THRESHOLD', '0.1'))
-PROFIT_TAKE_PERCENT = float(os.getenv('PROFIT_TAKE_PERCENT', '1.0'))
 WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 
 # ===== Risk Guard config =====
@@ -139,6 +138,31 @@ def _get_macd_neutral_threshold(sym: str) -> float:
         val = 0.2
     val = abs(val)
     _macd_neutral_cache[sym] = val
+    return val
+
+_profit_take_cache = {}
+
+def _get_profit_take_percent(sym: str) -> float:
+    """
+    Returns the take-profit threshold (% gain) for a given symbol,
+    read from environment variables. Expected key: PROFIT_TAKE_<SYMBOL> (e.g., PROFIT_TAKE_AMD=1.0).
+    Falls back to PROFIT_TAKE_DEFAULT, else 1.0.
+    Cached per symbol to avoid repeated env lookups.
+    """
+    if sym in _profit_take_cache:
+        return _profit_take_cache[sym]
+    key_specific = f"PROFIT_TAKE_{sym.upper()}"
+    raw = os.getenv(key_specific)
+    if raw is None:
+        raw = os.getenv("PROFIT_TAKE_DEFAULT", "1.0")
+        log(f"⚙️ {key_specific} not set; using PROFIT_TAKE_DEFAULT={raw}")
+    try:
+        val = float(raw)
+    except Exception:
+        log(f"⚠️ Invalid profit take threshold for {sym}: '{raw}'. Falling back to 1.0")
+        val = 1.0
+    val = abs(val)
+    _profit_take_cache[sym] = val
     return val
 
 
@@ -526,20 +550,21 @@ async def handle_bar(bar: dict):
     # TAKE-PROFIT logic
     if pos > 0 and pos_obj is not None:
         try:
+            profit_threshold = _get_profit_take_percent(sym)
             unrealized_plpc = float(pos_obj.unrealized_plpc) * 100
-            log(f"💰 {sym} unrealized P&L: {unrealized_plpc:.2f}% (threshold {PROFIT_TAKE_PERCENT:.2f}%)")
-            if unrealized_plpc >= PROFIT_TAKE_PERCENT:
+            log(f"💰 {sym} unrealized P&L: {unrealized_plpc:.2f}% (threshold {profit_threshold:.2f}%)")
+            if unrealized_plpc >= profit_threshold:
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked TAKE-PROFIT SELL {sym} x{pos} (trading halted)")
                     return
                 bid, _ = fetch_quote(sym)
-                log(f"🔴🔴🔴 TAKE-PROFIT {sym}: {unrealized_plpc:.2f}% >= {PROFIT_TAKE_PERCENT:.2f}%, selling {pos} @ {bid:.2f}🔴🔴🔴")
+                log(f"🔴🔴🔴 TAKE-PROFIT {sym}: {unrealized_plpc:.2f}% >= {profit_threshold:.2f}%, selling {pos} @ {bid:.2f}🔴🔴🔴")
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
                 log(f"Sold {sym} Updated last_trade_time for {sym} to {last_trade_time[sym]}")
                 return
             else:
-                log(f"⏳ {sym}: holding position, profit {unrealized_plpc:.2f}% < {PROFIT_TAKE_PERCENT:.2f}%")
+                log(f"⏳ {sym}: holding position, profit {unrealized_plpc:.2f}% < {profit_threshold:.2f}%")
         except Exception as e:
             log(f"⚠️ Error checking profit for {sym}: {e}")
         return
