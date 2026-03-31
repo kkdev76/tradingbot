@@ -475,6 +475,7 @@ async def handle_bar(bar: dict):
     if pos > 0 and pos_obj is not None:
         try:
             unrealized_plpc = float(pos_obj.unrealized_plpc) * 100
+            log(f"🧮 Stop-loss check for {sym}: unrealized P&L={unrealized_plpc:.2f}% | trigger=<0%")
             if unrealized_plpc < 0:
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked STOP-LOSS SELL {sym} x{pos} (trading halted)")
@@ -482,8 +483,10 @@ async def handle_bar(bar: dict):
                 log(f"🛑🛑🛑 STOP-LOSS {sym}: unrealized P&L {unrealized_plpc:.2f}% < 0%, market selling {pos} shares immediately 🛑🛑🛑")
                 place_sell_market(sym, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
-                log(f"🛑 Stop-loss executed for {sym}. Updated last_trade_time to {last_trade_time[sym]}")
+                log(f"✅ Stop-loss executed for {sym}. Updated last_trade_time to {last_trade_time[sym]}")
                 return
+            else:
+                log(f"✅ {sym}: P&L healthy ({unrealized_plpc:.2f}%), no stop-loss triggered")
         except Exception as e:
             log(f"⚠️ Error during stop-loss check for {sym}: {e}")
 
@@ -568,7 +571,7 @@ async def handle_bar(bar: dict):
         try:
             profit_threshold = _get_profit_take_percent(sym)
             unrealized_plpc = float(pos_obj.unrealized_plpc) * 100
-            log(f"💰 {sym} unrealized P&L: {unrealized_plpc:.2f}% (threshold {profit_threshold:.2f}%)")
+            log(f"🧮 Take-profit check for {sym}: unrealized P&L={unrealized_plpc:.2f}% | trigger>={profit_threshold:.2f}%")
             if unrealized_plpc >= profit_threshold:
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked TAKE-PROFIT SELL {sym} x{pos} (trading halted)")
@@ -577,10 +580,10 @@ async def handle_bar(bar: dict):
                 log(f"🔴🔴🔴 TAKE-PROFIT {sym}: {unrealized_plpc:.2f}% >= {profit_threshold:.2f}%, selling {pos} @ {bid:.2f}🔴🔴🔴")
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
-                log(f"Sold {sym} Updated last_trade_time for {sym} to {last_trade_time[sym]}")
+                log(f"✅ Take-profit sold {sym}. Updated last_trade_time to {last_trade_time[sym]}")
                 return
             else:
-                log(f"⏳ {sym}: holding position, profit {unrealized_plpc:.2f}% < {profit_threshold:.2f}%")
+                log(f"⏳ {sym}: holding position, P&L {unrealized_plpc:.2f}% has not reached take-profit threshold {profit_threshold:.2f}%")
         except Exception as e:
             log(f"⚠️ Error checking profit for {sym}: {e}")
         return
