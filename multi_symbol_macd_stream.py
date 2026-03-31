@@ -76,7 +76,21 @@ trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
 
 # State
 dfs = {sym: pd.DataFrame(columns=['timestamp','open','high','low','close','volume']) for sym in SYMBOLS}
-remaining_budget = {sym: float(os.getenv('DEFAULT_DOLLAR','0')) for sym in SYMBOLS}
+# Parse per-symbol budgets from DOLLAR_BUDGETS (e.g. AMD:10000,TSLA:5000)
+# Falls back to DEFAULT_DOLLAR if a symbol is not listed
+_default_dollar = float(os.getenv('DEFAULT_DOLLAR', '0'))
+_dollar_budgets_raw = os.getenv('DOLLAR_BUDGETS', '')
+_dollar_budgets = {}
+for _entry in _dollar_budgets_raw.split(','):
+    _entry = _entry.strip()
+    if ':' in _entry:
+        _sym, _val = _entry.split(':', 1)
+        try:
+            _dollar_budgets[_sym.strip().upper()] = float(_val.strip())
+        except ValueError:
+            pass
+remaining_budget = {sym: _dollar_budgets.get(sym, _default_dollar) for sym in SYMBOLS}
+log(f"💵 Budgets loaded: { {s: remaining_budget[s] for s in SYMBOLS} }")
 last_trade_time = {sym: datetime.min.replace(tzinfo=timezone.utc) for sym in SYMBOLS}
 # Live quote cache (bid, ask) updated from websocket
 latest_quote = {sym: (0.0, 0.0) for sym in SYMBOLS}
