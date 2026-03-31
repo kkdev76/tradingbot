@@ -16,8 +16,8 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 echo "=== Setting up git config ==="
-git config --global user.name "Ramnath"
-git config --global user.email "dgramnath@gmail.com"
+git config --global user.name "KK"
+git config --global user.email "kirthikumar.d@gmail.com"
 
 echo ""
 echo "=== Setup complete ==="
