@@ -471,6 +471,22 @@ async def handle_bar(bar: dict):
             log(f"⚠️ Could not fetch position for {sym}: {err}")
         pos = 0
 
+    # STOP-LOSS: if holding and unrealized P&L has gone negative, market sell immediately
+    if pos > 0 and pos_obj is not None:
+        try:
+            unrealized_plpc = float(pos_obj.unrealized_plpc) * 100
+            if unrealized_plpc < 0:
+                if STOP_TRADING:
+                    log(f"[RiskGuard] Blocked STOP-LOSS SELL {sym} x{pos} (trading halted)")
+                    return
+                log(f"🛑🛑🛑 STOP-LOSS {sym}: unrealized P&L {unrealized_plpc:.2f}% < 0%, market selling {pos} shares immediately 🛑🛑🛑")
+                place_sell_market(sym, pos)
+                last_trade_time[sym] = datetime.now(timezone.utc)
+                log(f"🛑 Stop-loss executed for {sym}. Updated last_trade_time to {last_trade_time[sym]}")
+                return
+        except Exception as e:
+            log(f"⚠️ Error during stop-loss check for {sym}: {e}")
+
     # Check for pending sell orders and convert to market sell if needed
     if pos > 0:
         try:
