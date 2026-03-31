@@ -389,7 +389,7 @@ def scheduled_shutdown_guard_check(client: TradingClient):
     """
     global _last_shutdown_check_minute, STOP_TRADING
 
-    log(f"🕒 [ShutdownGuard] Check start")
+    # log(f"🕒 [ShutdownGuard] Check start")
 
     if STOP_TRADING:
         log(f"🛑 [ShutdownGuard] Trading halted; skipping shutdown check")
@@ -397,12 +397,12 @@ def scheduled_shutdown_guard_check(client: TradingClient):
 
     shutdown_time_str = os.getenv("CRON_SHUTDOWN", "").strip()
     if not shutdown_time_str:
-        log(f"⏭️ [ShutdownGuard] CRON_SHUTDOWN not set; skipping")
+        # log(f"⏭️ [ShutdownGuard] CRON_SHUTDOWN not set; skipping")
         return  # Disabled if not set
 
     try:
         shutdown_hour, shutdown_minute = map(int, shutdown_time_str.split(":"))
-        log(f"✅ [ShutdownGuard] Parsed shutdown time {shutdown_hour:02d}:{shutdown_minute:02d} PT")
+        # log(f"✅ [ShutdownGuard] Parsed shutdown time {shutdown_hour:02d}:{shutdown_minute:02d} PT")
     except Exception:
         log(f"❌ Invalid CRON_SHUTDOWN value: {shutdown_time_str}")
         return
@@ -412,10 +412,10 @@ def scheduled_shutdown_guard_check(client: TradingClient):
 
     # Avoid repeating shutdown check more than once per minute
     if _last_shutdown_check_minute == minute_key:
-        log(f"⏭️ [ShutdownGuard] Already checked at {minute_key}; skipping")
+        # log(f"⏭️ [ShutdownGuard] Already checked at {minute_key}; skipping")
         return
     _last_shutdown_check_minute = minute_key
-    log(f"✅ [ShutdownGuard] Marked shutdown check at {minute_key}")
+    # log(f"✅ [ShutdownGuard] Marked shutdown check at {minute_key}")
 
     if now_pt.hour == shutdown_hour and now_pt.minute == shutdown_minute:
         log(f"⚠️ [ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT")
@@ -423,17 +423,17 @@ def scheduled_shutdown_guard_check(client: TradingClient):
             client,
             reason=f"Scheduled shutdown at {shutdown_time_str} PT"
         )
-    else:
-        log(f"🕒 [ShutdownGuard] Not shutdown time yet (now {now_pt.strftime('%H:%M')} PT)")
+    # else:
+        # log(f"🕒 [ShutdownGuard] Not shutdown time yet (now {now_pt.strftime('%H:%M')} PT)")
 
     try:
         daily_pl = get_daily_pl(client)
-        log(f"ℹ️ [RiskGuard] Daily P/L: {daily_pl:.2f} (threshold {NEGATIVE_PL_THRESHOLD:.2f})")
+        # log(f"ℹ️ [RiskGuard] Daily P/L: {daily_pl:.2f} (threshold {NEGATIVE_PL_THRESHOLD:.2f})")
         if daily_pl <= NEGATIVE_PL_THRESHOLD:
             log(f"❌ [RiskGuard] BREACH: {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
             trigger_global_liquidation_and_exit(client, reason=f"Daily P/L {daily_pl:.2f} <= {NEGATIVE_PL_THRESHOLD:.2f}")
-        else:
-            log(f"✅ [RiskGuard] P/L above threshold; continuing")
+        # else:
+            # log(f"✅ [RiskGuard] P/L above threshold; continuing")
     except Exception as e:
         log(f"💥 [RiskGuard] Failed to compute daily P/L: {e}")
 
@@ -443,11 +443,11 @@ def scheduled_shutdown_guard_check(client: TradingClient):
 async def handle_bar(bar: dict):
     sym = bar['S']
     # Entry log for this bar processing
-    try:
-        ts_dbg = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
-        log(f"🧭========  handle_bar start for {sym} at {ts_dbg.isoformat()}")
-    except Exception:
-        log(f"🧭 handle_bar start for {sym} (timestamp parse failed)")
+    # try:
+    #     ts_dbg = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
+    #     log(f"🧭========  handle_bar start for {sym} at {ts_dbg.isoformat()}")
+    # except Exception:
+    #     log(f"🧭 handle_bar start for {sym} (timestamp parse failed)")
 
     # ===== Guards: run once per minute =====
     # log(f"🛡️ Running risk_guard_check for {sym}")
@@ -472,18 +472,18 @@ async def handle_bar(bar: dict):
     buffer_values = macd_buffer[sym]
     
     log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}")
-    log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
+    # log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
 
     # Position check
     pos_obj = None
     try:
         pos_obj = trading_client.get_open_position(sym)
         pos = int(float(pos_obj.qty))
-        log(f"ℹ️ Current position for {sym}: {pos} shares")
+        # log(f"ℹ️ Current position for {sym}: {pos} shares")
     except Exception as e:
         err = str(e)
         if '"code":40410000' in err and 'position does not exist' in err:
-            log(f"⚠️ Zero Positions for {sym}")
+            pass  # log(f"⚠️ Zero Positions for {sym}")
         else:
             log(f"⚠️ Could not fetch position for {sym}: {err}")
         pos = 0
@@ -492,7 +492,7 @@ async def handle_bar(bar: dict):
     if pos > 0 and pos_obj is not None:
         try:
             unrealized_plpc = float(pos_obj.unrealized_plpc) * 100
-            log(f"🧮 Stop-loss check for {sym}: unrealized P&L={unrealized_plpc:.2f}% | trigger=<0%")
+            # log(f"🧮 Stop-loss check for {sym}: unrealized P&L={unrealized_plpc:.2f}% | trigger=<0%")
             if unrealized_plpc < 0:
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked STOP-LOSS SELL {sym} x{pos} (trading halted)")
@@ -502,8 +502,8 @@ async def handle_bar(bar: dict):
                 last_trade_time[sym] = datetime.now(timezone.utc)
                 log(f"✅ Stop-loss executed for {sym}. Updated last_trade_time to {last_trade_time[sym]}")
                 return
-            else:
-                log(f"✅ {sym}: P&L healthy ({unrealized_plpc:.2f}%), no stop-loss triggered")
+            # else:
+                # log(f"✅ {sym}: P&L healthy ({unrealized_plpc:.2f}%), no stop-loss triggered")
         except Exception as e:
             log(f"⚠️ Error during stop-loss check for {sym}: {e}")
 
@@ -590,7 +590,7 @@ async def handle_bar(bar: dict):
             budget = remaining_budget[sym]
             dollar_threshold = (profit_threshold_pct / 100) * budget
             unrealized_pl = float(pos_obj.unrealized_pl)
-            log(f"🧮 Take-profit check for {sym}: unrealized P&L=${unrealized_pl:.2f} | trigger>=${dollar_threshold:.2f} ({profit_threshold_pct:.2f}% of ${budget:.2f})")
+            # log(f"🧮 Take-profit check for {sym}: unrealized P&L=${unrealized_pl:.2f} | trigger>=${dollar_threshold:.2f} ({profit_threshold_pct:.2f}% of ${budget:.2f})")
             if unrealized_pl >= dollar_threshold:
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked TAKE-PROFIT SELL {sym} x{pos} (trading halted)")
@@ -601,8 +601,8 @@ async def handle_bar(bar: dict):
                 last_trade_time[sym] = datetime.now(timezone.utc)
                 log(f"✅ Take-profit sold {sym}. Updated last_trade_time to {last_trade_time[sym]}")
                 return
-            else:
-                log(f"⏳ {sym}: holding position, P&L ${unrealized_pl:.2f} has not reached take-profit threshold ${dollar_threshold:.2f}")
+            # else:
+                # log(f"⏳ {sym}: holding position, P&L ${unrealized_pl:.2f} has not reached take-profit threshold ${dollar_threshold:.2f}")
         except Exception as e:
             log(f"⚠️ Error checking profit for {sym}: {e}")
         return
@@ -616,12 +616,11 @@ async def handle_bar(bar: dict):
         if stale > 0:
             last_trade_time[sym] = datetime.min.replace(tzinfo=timezone.utc)
             log(f"🔄 Reset last_trade_time after canceling {stale} stale order(s) for {sym}")
-        else:
-            log(f"🧹 No stale open orders to cancel for {sym}")
+        # else:
+            # log(f"🧹 No stale open orders to cancel for {sym}")
 
-        
         gap_pct = (abs(abs(macd)-abs(sig))/abs(sig))*100 if sig else 0
-        log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f},Gap={gap_pct:.2f}, Threshold={PERCENT_THRESHOLD}")
+        # log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f},Gap={gap_pct:.2f}, Threshold={PERCENT_THRESHOLD}")
         if macd > sig and  gap_pct > PERCENT_THRESHOLD*100:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
@@ -660,7 +659,7 @@ async def handle_bar(bar: dict):
     else:
         # log(f"⚪️ Skipping buy for {sym}: existing position of {pos} shares")
         pass
-    log(f"🏁 ========= handle_bar end for {sym}")
+    # log(f"🏁 ========= handle_bar end for {sym}")
 
 
 # Main loop
