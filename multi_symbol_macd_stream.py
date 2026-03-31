@@ -43,7 +43,8 @@ def log(msg: str):
 
 
 # Load configuration
-load_dotenv('crypto.env')
+load_dotenv('keys.env')
+load_dotenv('settings.td')
 API_KEY = os.getenv('APCA_API_KEY_ID')
 SECRET_KEY = os.getenv('APCA_API_SECRET_KEY')
 TRADE_COOLDOWN_MINUTES = int(os.getenv('MIN_TRADE_COOLDOWN_MINUTES', '9'))

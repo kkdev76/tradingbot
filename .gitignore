@@ -25,6 +25,8 @@ Thumbs.db
 # Environment and secrets
 .env
 crypto.env
+keys.env
+crypto.env.bkp
 
 # Dashboard large files (manual exclusion)
 dashboard/.turbo/

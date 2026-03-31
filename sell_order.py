@@ -4,7 +4,8 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 from dotenv import load_dotenv
 
-load_dotenv("crypto.env")
+load_dotenv("keys.env")
+load_dotenv("settings.td")
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
