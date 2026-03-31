@@ -569,21 +569,23 @@ async def handle_bar(bar: dict):
     # TAKE-PROFIT logic
     if pos > 0 and pos_obj is not None:
         try:
-            profit_threshold = _get_profit_take_percent(sym)
-            unrealized_plpc = float(pos_obj.unrealized_plpc) * 100
-            log(f"🧮 Take-profit check for {sym}: unrealized P&L={unrealized_plpc:.2f}% | trigger>={profit_threshold:.2f}%")
-            if unrealized_plpc >= profit_threshold:
+            profit_threshold_pct = _get_profit_take_percent(sym)
+            budget = remaining_budget[sym]
+            dollar_threshold = (profit_threshold_pct / 100) * budget
+            unrealized_pl = float(pos_obj.unrealized_pl)
+            log(f"🧮 Take-profit check for {sym}: unrealized P&L=${unrealized_pl:.2f} | trigger>=${dollar_threshold:.2f} ({profit_threshold_pct:.2f}% of ${budget:.2f})")
+            if unrealized_pl >= dollar_threshold:
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked TAKE-PROFIT SELL {sym} x{pos} (trading halted)")
                     return
                 bid, _ = fetch_quote(sym)
-                log(f"🔴🔴🔴 TAKE-PROFIT {sym}: {unrealized_plpc:.2f}% >= {profit_threshold:.2f}%, selling {pos} @ {bid:.2f}🔴🔴🔴")
+                log(f"🔴🔴🔴 TAKE-PROFIT {sym}: P&L ${unrealized_pl:.2f} >= ${dollar_threshold:.2f}, selling {pos} @ {bid:.2f}🔴🔴🔴")
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
                 log(f"✅ Take-profit sold {sym}. Updated last_trade_time to {last_trade_time[sym]}")
                 return
             else:
-                log(f"⏳ {sym}: holding position, P&L {unrealized_plpc:.2f}% has not reached take-profit threshold {profit_threshold:.2f}%")
+                log(f"⏳ {sym}: holding position, P&L ${unrealized_pl:.2f} has not reached take-profit threshold ${dollar_threshold:.2f}")
         except Exception as e:
             log(f"⚠️ Error checking profit for {sym}: {e}")
         return
