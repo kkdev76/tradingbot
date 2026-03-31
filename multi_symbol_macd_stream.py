@@ -255,7 +255,10 @@ def _cancel_open_orders_for_symbol(client: TradingClient, sym: str) -> int:
                 cancelled += 1
                 log(f"🧹 Canceled stale open order for {sym} (id={oid}, status={o_status})")
             except Exception as ce:
-                log(f"❌ Failed to cancel order {oid} for {sym}: {ce}")
+                if '42210000' in str(ce):
+                    log(f"⚠️ Order {oid} for {sym} already pending cancel — skipping")
+                else:
+                    log(f"❌ Failed to cancel order {oid} for {sym}: {ce}")
         except Exception as ie:
             log(f"❌ Error while scanning order for {sym}: {ie}")
 

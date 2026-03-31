@@ -16,7 +16,14 @@ def cancel_symbol_orders(symbol: str):
     open_orders = trading_client.get_orders()
     for order in open_orders:
         if order.symbol == symbol:
-            trading_client.cancel_order_by_id(order.id)
+            try:
+                trading_client.cancel_order_by_id(order.id)
+            except Exception as e:
+                err = str(e)
+                if '42210000' in err:
+                    pass  # Order already pending cancel — safe to ignore
+                else:
+                    raise
 
 def place_sell(symbol: str, ask_price: float, qty: int = None) -> int:
     """Sell given qty shares (or all if qty=None) at LIMIT price (ask-0.05). Returns filled qty."""
