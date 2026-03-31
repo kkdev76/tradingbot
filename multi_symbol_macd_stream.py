@@ -95,6 +95,7 @@ last_trade_time = {sym: datetime.min.replace(tzinfo=timezone.utc) for sym in SYM
 # Live quote cache (bid, ask) updated from websocket
 latest_quote = {sym: (0.0, 0.0) for sym in SYMBOLS}
 _macd_neutral_cache = {}
+_last_delimiter_minute = None
 
 # MACD buffer for trend analysis - stores last 3 MACD values for each symbol
 macd_buffer = {sym: [] for sym in SYMBOLS}
@@ -441,7 +442,16 @@ def scheduled_shutdown_guard_check(client: TradingClient):
  
 
 async def handle_bar(bar: dict):
+    global _last_delimiter_minute
     sym = bar['S']
+
+    # Print a minute delimiter once per minute across all symbols
+    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
+    minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
+    if _last_delimiter_minute != minute_key:
+        _last_delimiter_minute = minute_key
+        log(f"{'='*10} 📊 {now_pt.strftime('%H:%M')} PT {'='*10}")
+
     # Entry log for this bar processing
     # try:
     #     ts_dbg = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
