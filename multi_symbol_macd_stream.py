@@ -96,6 +96,8 @@ last_trade_time = {sym: datetime.min.replace(tzinfo=timezone.utc) for sym in SYM
 latest_quote = {sym: (0.0, 0.0) for sym in SYMBOLS}
 _macd_neutral_cache = {}
 _last_delimiter_minute = None
+_minute_start_time = None
+_minute_bars_processed = 0
 
 # MACD buffer for trend analysis - stores last 3 MACD values for each symbol
 macd_buffer = {sym: [] for sym in SYMBOLS}
@@ -446,10 +448,13 @@ async def handle_bar(bar: dict):
     sym = bar['S']
 
     # Print a minute delimiter once per minute across all symbols
+    global _last_delimiter_minute, _minute_start_time, _minute_bars_processed
     now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
     minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
     if _last_delimiter_minute != minute_key:
         _last_delimiter_minute = minute_key
+        _minute_start_time = time.time()
+        _minute_bars_processed = 0
         log(f"{'='*10} 📊 {now_pt.strftime('%H:%M')} PT {'='*10}")
 
     # Entry log for this bar processing
@@ -670,6 +675,12 @@ async def handle_bar(bar: dict):
         # log(f"⚪️ Skipping buy for {sym}: existing position of {pos} shares")
         pass
     # log(f"🏁 ========= handle_bar end for {sym}")
+
+    # Print total elapsed time once all symbols have been processed for this minute
+    _minute_bars_processed += 1
+    if _minute_bars_processed >= len(SYMBOLS) and _minute_start_time is not None:
+        elapsed = time.time() - _minute_start_time
+        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed:.2f}s")
 
 
 # Main loop
