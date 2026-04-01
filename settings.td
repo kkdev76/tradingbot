@@ -1,11 +1,11 @@
-STOCK_LIST=AMD,TSLA,MSFT,INTC
+STOCK_LIST=AMD,TSLA,MSFT,INTC,ARM,MU,AVGO
 
 # Default USD budget per symbol if not overridden below
 DEFAULT_DOLLAR=10000
 
 # Per‑symbol USD budgets (SYMBOL:budget_in_USD comma‑separated)
 # Any symbol listed here will use its own budget; others fall back to DEFAULT_DOLLAR
-DOLLAR_BUDGETS=AMD:10000,MSFT:10000,TSLA:5000,INTC:5000,ARM:5000,MU:5000,AVGO:5000,   # per‑symbol overrides
+DOLLAR_BUDGETS=AMD:10000,MSFT:10000,TSLA:5000,INTC:5000,ARM:5000,MU:5000,AVGO:5000   # per‑symbol overrides
 
 # MACD entry threshold (MACD − Signal)
 PERCENT_THRESHOLD=0.25
