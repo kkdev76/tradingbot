@@ -444,11 +444,10 @@ def scheduled_shutdown_guard_check(client: TradingClient):
  
 
 async def handle_bar(bar: dict):
-    global _last_delimiter_minute
+    global _last_delimiter_minute, _minute_start_time, _minute_bars_processed
     sym = bar['S']
 
     # Print a minute delimiter once per minute across all symbols
-    global _last_delimiter_minute, _minute_start_time, _minute_bars_processed
     now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
     minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
     if _last_delimiter_minute != minute_key:
@@ -456,6 +455,12 @@ async def handle_bar(bar: dict):
         _minute_start_time = time.time()
         _minute_bars_processed = 0
         log(f"{'='*10} 📊 {now_pt.strftime('%H:%M')} PT {'='*10}")
+
+    # Count this symbol as processed (before any early returns)
+    _minute_bars_processed += 1
+    if _minute_bars_processed >= len(SYMBOLS) and _minute_start_time is not None:
+        elapsed_ms = (time.time() - _minute_start_time) * 1000
+        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_ms:.0f}ms")
 
     # Entry log for this bar processing
     # try:
@@ -675,12 +680,6 @@ async def handle_bar(bar: dict):
         # log(f"⚪️ Skipping buy for {sym}: existing position of {pos} shares")
         pass
     # log(f"🏁 ========= handle_bar end for {sym}")
-
-    # Print total elapsed time once all symbols have been processed for this minute
-    _minute_bars_processed += 1
-    if _minute_bars_processed >= len(SYMBOLS) and _minute_start_time is not None:
-        elapsed = time.time() - _minute_start_time
-        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed:.2f}s")
 
 
 # Main loop
