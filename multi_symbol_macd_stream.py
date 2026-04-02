@@ -676,44 +676,63 @@ async def handle_bar(bar: dict):
 async def main():
     for sym in SYMBOLS:
         bootstrap_history(sym)
-    log(f"🚀 Connecting to real-time stream...")
-    async with websockets.connect(WS_URL) as ws:
-        await ws.send(json.dumps({'action':'auth','key':API_KEY,'secret':SECRET_KEY}))
-        await ws.recv()
-        # Subscribe to both bars and quotes for real-time streaming
-        await ws.send(json.dumps({'action':'subscribe','bars': SYMBOLS, 'quotes': SYMBOLS}))
-        log(f"Subscribed to bars: {','.join(SYMBOLS)}")
-        _loop_minute_key = None
-        _loop_minute_start = None
-        _loop_bars_seen = set()
 
-        while True:
-            msg = await ws.recv()
-            data = json.loads(msg) if isinstance(msg, str) else msg
-            for m in data:
-                msg_type = m.get('T')
-                if msg_type == 'b':
-                    # Track which symbols have been processed this minute
-                    bar_minute = m.get('t', '')[:16]
-                    if bar_minute != _loop_minute_key:
-                        _loop_minute_key = bar_minute
-                        _loop_minute_start = time.time()
-                        _loop_bars_seen = set()
+    reconnect_delay = 5
+    while True:
+        try:
+            log(f"🚀 Connecting to real-time stream...")
+            async with websockets.connect(WS_URL) as ws:
+                await ws.send(json.dumps({'action':'auth','key':API_KEY,'secret':SECRET_KEY}))
+                await ws.recv()
+                # Subscribe to both bars and quotes for real-time streaming
+                await ws.send(json.dumps({'action':'subscribe','bars': SYMBOLS, 'quotes': SYMBOLS}))
+                log(f"Subscribed to bars: {','.join(SYMBOLS)}")
+                reconnect_delay = 5  # reset on successful connect
+                _loop_minute_key = None
+                _loop_minute_start = None
+                _loop_bars_seen = set()
 
-                    await handle_bar(m)
+                while True:
+                    msg = await ws.recv()
+                    data = json.loads(msg) if isinstance(msg, str) else msg
+                    for m in data:
+                        msg_type = m.get('T')
+                        if msg_type == 'b':
+                            # Track which symbols have been processed this minute
+                            bar_minute = m.get('t', '')[:16]
+                            if bar_minute != _loop_minute_key:
+                                _loop_minute_key = bar_minute
+                                _loop_minute_start = time.time()
+                                _loop_bars_seen = set()
 
-                    _loop_bars_seen.add(m.get('S'))
-                    if _loop_bars_seen >= set(SYMBOLS):
-                        elapsed_ms = (time.time() - _loop_minute_start) * 1000
-                        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_ms:.0f}ms")
-                        _loop_bars_seen = set()
+                            await handle_bar(m)
 
-                elif msg_type == 'q':  # quote update
-                    sym_q = m.get('S')
-                    bp = m.get('bp', 0.0)
-                    ap = m.get('ap', 0.0)
-                    latest_quote[sym_q] = (bp, ap)
-                    # log(f"💬 QUOTE {sym_q}: bid={bp:.2f}, ask={ap:.2f}")
+                            _loop_bars_seen.add(m.get('S'))
+                            if _loop_bars_seen >= set(SYMBOLS):
+                                elapsed_ms = (time.time() - _loop_minute_start) * 1000
+                                log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_ms:.0f}ms")
+                                _loop_bars_seen = set()
+
+                        elif msg_type == 'q':  # quote update
+                            sym_q = m.get('S')
+                            bp = m.get('bp', 0.0)
+                            ap = m.get('ap', 0.0)
+                            latest_quote[sym_q] = (bp, ap)
+                            # log(f"💬 QUOTE {sym_q}: bid={bp:.2f}, ask={ap:.2f}")
+        except websockets.exceptions.ConnectionClosed as e:
+            if STOP_TRADING:
+                log(f"🔌 WebSocket closed during halt, not reconnecting: {e}")
+                return
+            log(f"🔌 WebSocket disconnected: {e}. Reconnecting in {reconnect_delay}s...")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, 60)
+        except Exception as e:
+            if STOP_TRADING:
+                log(f"💥 Stream error during halt, not reconnecting: {e}")
+                return
+            log(f"💥 Stream error: {e}. Reconnecting in {reconnect_delay}s...")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, 60)
     
 if __name__ == '__main__':
     try:
