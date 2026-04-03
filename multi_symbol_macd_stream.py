@@ -681,7 +681,7 @@ async def main():
     while True:
         try:
             log(f"🚀 Connecting to real-time stream...")
-            async with websockets.connect(WS_URL) as ws:
+            async with websockets.connect(WS_URL, ping_interval=20, ping_timeout=30) as ws:
                 await ws.send(json.dumps({'action':'auth','key':API_KEY,'secret':SECRET_KEY}))
                 await ws.recv()
                 # Subscribe to both bars and quotes for real-time streaming
