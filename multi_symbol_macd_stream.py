@@ -96,6 +96,8 @@ last_trade_time = {sym: datetime.min.replace(tzinfo=timezone.utc) for sym in SYM
 latest_quote = {sym: (0.0, 0.0) for sym in SYMBOLS}
 _macd_neutral_cache = {}
 _last_delimiter_minute = None
+_minute_start_time = None
+_minute_bars_processed = 0
 
 # MACD buffer for trend analysis - stores last 3 MACD values for each symbol
 macd_buffer = {sym: [] for sym in SYMBOLS}
@@ -442,7 +444,7 @@ def scheduled_shutdown_guard_check(client: TradingClient):
  
 
 async def handle_bar(bar: dict):
-    global _last_delimiter_minute
+    global _last_delimiter_minute, _minute_start_time, _minute_bars_processed
     sym = bar['S']
 
     # Print a minute delimiter once per minute across all symbols
@@ -450,7 +452,15 @@ async def handle_bar(bar: dict):
     minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
     if _last_delimiter_minute != minute_key:
         _last_delimiter_minute = minute_key
+        _minute_start_time = time.time()
+        _minute_bars_processed = 0
         log(f"{'='*10} 📊 {now_pt.strftime('%H:%M')} PT {'='*10}")
+
+    # Count this symbol as processed (before any early returns)
+    _minute_bars_processed += 1
+    if _minute_bars_processed >= len(SYMBOLS) and _minute_start_time is not None:
+        elapsed_ms = (time.time() - _minute_start_time) * 1000
+        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_ms:.0f}ms")
 
     # Entry log for this bar processing
     # try:
@@ -683,31 +693,14 @@ async def main():
         # Subscribe to both bars and quotes for real-time streaming
         await ws.send(json.dumps({'action':'subscribe','bars': SYMBOLS, 'quotes': SYMBOLS}))
         log(f"Subscribed to bars: {','.join(SYMBOLS)}")
-        _loop_minute_key = None
-        _loop_minute_start = None
-        _loop_bars_seen = set()
-
         while True:
             msg = await ws.recv()
             data = json.loads(msg) if isinstance(msg, str) else msg
             for m in data:
                 msg_type = m.get('T')
                 if msg_type == 'b':
-                    # Track which symbols have been processed this minute
-                    bar_minute = m.get('t', '')[:16]
-                    if bar_minute != _loop_minute_key:
-                        _loop_minute_key = bar_minute
-                        _loop_minute_start = time.time()
-                        _loop_bars_seen = set()
-
+                    
                     await handle_bar(m)
-
-                    _loop_bars_seen.add(m.get('S'))
-                    if _loop_bars_seen >= set(SYMBOLS):
-                        elapsed_ms = (time.time() - _loop_minute_start) * 1000
-                        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_ms:.0f}ms")
-                        _loop_bars_seen = set()
-
                 elif msg_type == 'q':  # quote update
                     sym_q = m.get('S')
                     bp = m.get('bp', 0.0)
