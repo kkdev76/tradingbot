@@ -1,11 +1,11 @@
-STOCK_LIST=NVDA,AAPL,JPM,V,META,XOM,CAT,LLY,AVGO,MSFT
+STOCK_LIST=NVDA,AAPL,META,MSFT,JPM
 
 # Default USD budget per symbol if not overridden below
 DEFAULT_DOLLAR=5000
 
 # Per‑symbol USD budgets (SYMBOL:budget_in_USD comma‑separated)
 # Any symbol listed here will use its own budget; others fall back to DEFAULT_DOLLAR
-DOLLAR_BUDGETS=NVDA:7000,AAPL:7000,META:7000,JPM:5000,V:5000,XOM:5000,MSFT:5000,CAT:5000,LLY:5000,AVGO:5000   # per‑symbol overrides
+DOLLAR_BUDGETS=NVDA:7000,AAPL:7000,META:7000,MSFT:5000,JPM:5000   # per‑symbol overrides
 
 # MACD entry threshold (MACD − Signal)
 PERCENT_THRESHOLD=0.25
@@ -32,12 +32,7 @@ MACD_WARMUP_BARS=78
 # Take-profit: sell when unrealized P&L % reaches this threshold (per-symbol)
 PROFIT_TAKE_NVDA=0.4
 PROFIT_TAKE_AAPL=0.4
-PROFIT_TAKE_JPM=0.4
-PROFIT_TAKE_V=0.4
 PROFIT_TAKE_META=0.4
-PROFIT_TAKE_XOM=0.4
-PROFIT_TAKE_CAT=0.4
-PROFIT_TAKE_LLY=0.4
-PROFIT_TAKE_AVGO=0.4
 PROFIT_TAKE_MSFT=0.4
+PROFIT_TAKE_JPM=0.4
 PROFIT_TAKE_DEFAULT=0.35
