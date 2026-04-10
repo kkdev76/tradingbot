@@ -510,7 +510,7 @@ async def handle_bar(bar: dict):
                 log(f"🛑🛑🛑 STOP-LOSS {sym}: unrealized P&L {unrealized_plpc:.2f}% < 0%, market selling {pos} shares immediately 🛑🛑🛑")
                 place_sell_market(sym, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
-                log(f"✅ Stop-loss executed for {sym}. Updated last_trade_time to {last_trade_time[sym]}")
+                log(f"✅ Stop-loss executed for {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
                 return
             # else:
                 # log(f"✅ {sym}: P&L healthy ({unrealized_plpc:.2f}%), no stop-loss triggered")
@@ -609,7 +609,7 @@ async def handle_bar(bar: dict):
                 log(f"🔴🔴🔴 TAKE-PROFIT {sym}: P&L ${unrealized_pl:.2f} >= ${dollar_threshold:.2f}, selling {pos} @ {bid:.2f}🔴🔴🔴")
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
-                log(f"✅ Take-profit sold {sym}. Updated last_trade_time to {last_trade_time[sym]}")
+                log(f"✅ Take-profit sold {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
                 return
             # else:
                 # log(f"⏳ {sym}: holding position, P&L ${unrealized_pl:.2f} has not reached take-profit threshold ${dollar_threshold:.2f}")
@@ -654,7 +654,7 @@ async def handle_bar(bar: dict):
                 log(f"🟢🟢🟢 BUY {sym}: MACD:{macd}, Signal:{sig}  {macd:.4f}>{sig:.4f}, gap {gap_pct:.1f}% ≥ {PERCENT_THRESHOLD*100:.1f}% → buying @ {limit:.2f}🟢🟢🟢")
                 place_buy(sym, limit, remaining_budget[sym])
                 last_trade_time[sym] = now
-                log(f"Updated last_trade_time for {sym} to {last_trade_time[sym]}")
+                log(f"Updated last_trade_time for {sym} to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
             else: 
                 log(f"💀💀💀 All Checks Passed for BUY {sym} but MACD is not increasing so skipping buy💀💀💀")     
         elif macd > sig:
