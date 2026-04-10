@@ -34,3 +34,6 @@ dashboard/public/
 
 # Prevent npm debug logs
 npm-debug.log*
+
+# Local-only tools (not tracked in git)
+order_dashboard/
