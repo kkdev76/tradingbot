@@ -71,6 +71,21 @@ def _load_negative_pl_threshold() -> float:
 
 NEGATIVE_PL_THRESHOLD = _load_negative_pl_threshold()
 
+def _load_stop_loss_percent() -> float:
+    raw = os.getenv("STOP_LOSS_PERCENT")
+    if raw is None:
+        log(f"⚠️ STOP_LOSS_PERCENT not set; defaulting to 0.15%")
+        return 0.15
+    try:
+        val = abs(float(raw))
+        log(f"STOP LOSS PERCENT RETRIEVED :: {val}%")
+        return val
+    except Exception:
+        log(f"❌ Invalid STOP_LOSS_PERCENT value: {raw}. Falling back to 0.15%")
+        return 0.15
+
+STOP_LOSS_PERCENT = _load_stop_loss_percent()
+
 # Alpaca client
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
 
@@ -502,12 +517,12 @@ async def handle_bar(bar: dict):
     if pos > 0 and pos_obj is not None:
         try:
             unrealized_plpc = float(pos_obj.unrealized_plpc) * 100
-            # log(f"🧮 Stop-loss check for {sym}: unrealized P&L={unrealized_plpc:.2f}% | trigger=<0%")
-            if unrealized_plpc < 0:
+            # log(f"🧮 Stop-loss check for {sym}: unrealized P&L={unrealized_plpc:.2f}% | trigger=<-{STOP_LOSS_PERCENT}%")
+            if unrealized_plpc < -STOP_LOSS_PERCENT:
                 if STOP_TRADING:
                     log(f"[RiskGuard] Blocked STOP-LOSS SELL {sym} x{pos} (trading halted)")
                     return
-                log(f"🛑🛑🛑 STOP-LOSS {sym}: unrealized P&L {unrealized_plpc:.2f}% < 0%, market selling {pos} shares immediately 🛑🛑🛑")
+                log(f"🛑🛑🛑 STOP-LOSS {sym}: unrealized P&L {unrealized_plpc:.2f}% < -{STOP_LOSS_PERCENT}%, market selling {pos} shares immediately 🛑🛑🛑")
                 place_sell_market(sym, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
                 log(f"✅ Stop-loss executed for {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
