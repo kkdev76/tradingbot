@@ -630,6 +630,17 @@ async def handle_bar(bar: dict):
                 # log(f"⏳ {sym}: holding position, P&L ${unrealized_pl:.2f} has not reached take-profit threshold ${dollar_threshold:.2f}")
         except Exception as e:
             log(f"⚠️ Error checking profit for {sym}: {e}")
+
+    # MACD BEARISH CROSSOVER EXIT: sell if MACD has crossed below signal while holding
+    if pos > 0:
+        if macd < sig:
+            if STOP_TRADING:
+                log(f"[RiskGuard] Blocked MACD-EXIT SELL {sym} x{pos} (trading halted)")
+                return
+            log(f"🔴🔴🔴 MACD EXIT {sym}: MACD {macd:.4f} < Signal {sig:.4f}, selling {pos} shares 🔴🔴🔴")
+            place_sell_market(sym, pos)
+            last_trade_time[sym] = datetime.now(timezone.utc)
+            log(f"✅ MACD exit sold {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
         return
 
     # BUY logic with cooldown
