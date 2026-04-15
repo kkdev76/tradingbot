@@ -91,8 +91,6 @@ trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
 
 # State
 dfs = {sym: pd.DataFrame(columns=['timestamp','open','high','low','close','volume']) for sym in SYMBOLS}
-# Buffer for aggregating 1-min websocket bars into 2-min bars (keyed by symbol)
-_pending_1min_bar = {sym: None for sym in SYMBOLS}
 # Parse per-symbol budgets from DOLLAR_BUDGETS (e.g. AMD:10000,TSLA:5000)
 # Falls back to DEFAULT_DOLLAR if a symbol is not listed
 _default_dollar = float(os.getenv('DEFAULT_DOLLAR', '0'))
@@ -379,12 +377,12 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
 
 def bootstrap_history(sym: str):
     end = datetime.now(timezone.utc)
-    start = end - timedelta(minutes=480)
+    start = end - timedelta(minutes=120)
     bars = requests.get(
         f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
         headers={'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': SECRET_KEY},
         params={
-            'timeframe': '2Min',
+            'timeframe': '1Min',
             'start': start.isoformat().replace('+00:00','Z'),
             'end': end.isoformat().replace('+00:00','Z'),
             'limit': 120
@@ -710,48 +708,19 @@ async def main():
             for m in data:
                 msg_type = m.get('T')
                 if msg_type == 'b':
-                    sym_b = m.get('S')
-
-                    # Aggregate consecutive 1-min bars into 2-min bars
-                    pending = _pending_1min_bar.get(sym_b)
-                    if pending is None:
-                        # First bar of the pair — store and wait
-                        _pending_1min_bar[sym_b] = m
-                        continue
-
-                    # Second bar — check they are consecutive minutes
-                    first_ts = datetime.fromisoformat(pending['t'].replace('Z', '+00:00'))
-                    second_ts = datetime.fromisoformat(m['t'].replace('Z', '+00:00'))
-                    if (second_ts - first_ts).total_seconds() == 60:
-                        two_min_bar = {
-                            'T': 'b',
-                            'S': sym_b,
-                            't': pending['t'],
-                            'o': pending['o'],
-                            'h': max(pending['h'], m['h']),
-                            'l': min(pending['l'], m['l']),
-                            'c': m['c'],
-                            'v': pending['v'] + m['v'],
-                        }
-                        _pending_1min_bar[sym_b] = None
-                    else:
-                        # Gap in bars — start a new pair from this bar
-                        _pending_1min_bar[sym_b] = m
-                        continue
-
-                    # Track which 2-min periods have been processed
-                    bar_minute = two_min_bar.get('t', '')[:16]
+                    # Track which symbols have been processed this minute
+                    bar_minute = m.get('t', '')[:16]
                     if bar_minute != _loop_minute_key:
                         _loop_minute_key = bar_minute
                         _loop_minute_start = time.time()
                         _loop_bars_seen = set()
 
-                    await handle_bar(two_min_bar)
+                    await handle_bar(m)
 
-                    _loop_bars_seen.add(sym_b)
+                    _loop_bars_seen.add(m.get('S'))
                     if _loop_bars_seen >= set(SYMBOLS):
-                        elapsed_s = time.time() - _loop_minute_start
-                        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_s:.2f}s")
+                        elapsed_ms = (time.time() - _loop_minute_start) * 1000
+                        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_ms:.0f}ms")
                         _loop_bars_seen = set()
 
                 elif msg_type == 'q':  # quote update
