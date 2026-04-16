@@ -730,8 +730,8 @@ async def main():
 
                     _loop_bars_seen.add(m.get('S'))
                     if _loop_bars_seen >= set(SYMBOLS):
-                        elapsed_ms = (time.time() - _loop_minute_start) * 1000
-                        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_ms:.0f}ms")
+                        elapsed_s = time.time() - _loop_minute_start
+                        log(f"⏱️ All {len(SYMBOLS)} stocks processed in {elapsed_s:.2f}s")
                         _loop_bars_seen = set()
 
                 elif msg_type == 'q':  # quote update
