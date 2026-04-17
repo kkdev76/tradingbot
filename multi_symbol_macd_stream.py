@@ -655,21 +655,16 @@ async def handle_bar(bar: dict):
         # else:
             # log(f"🧹 No stale open orders to cancel for {sym}")
 
-        gap_pct = (abs(abs(macd)-abs(sig))/abs(sig))*100 if sig else 0
-        # log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f},Gap={gap_pct:.2f}, Threshold={PERCENT_THRESHOLD}")
-        if macd > sig and  gap_pct > PERCENT_THRESHOLD*100:
+        gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
+        # log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Gap={gap_pct:.2f}%")
+        if macd > 0.2 and gap_pct > 40:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
             # log(f"⏳ Cooldown check for {sym}: elapsed {elapsed:.1f} min (threshold {TRADE_COOLDOWN_MINUTES} min)")
             if elapsed < TRADE_COOLDOWN_MINUTES:
                 # log(f"⏳ Skipping BUY for {sym}: cooldown active")
                 return
-            threshold = _get_macd_neutral_threshold(sym)
-            if -threshold < macd < threshold:
-                log(f"⏳ MACD in uncertainty zone for {sym}: |MACD|={abs(macd):.4f} < {threshold:.4f}; skipping buy")
-                return
-            
-            
+
             if STOP_TRADING:
                 log(f"[RiskGuard] Blocked BUY {sym} (trading halted)")
                 return
@@ -677,15 +672,14 @@ async def handle_bar(bar: dict):
             if is_increasing:
                 bid, _ = fetch_quote(sym)
                 limit = round(bid + 0.01, 2)
-                log(f"🟢🟢🟢 BUY {sym}: MACD:{macd}, Signal:{sig}  {macd:.4f}>{sig:.4f}, gap {gap_pct:.1f}% ≥ {PERCENT_THRESHOLD*100:.1f}% → buying @ {limit:.2f}🟢🟢🟢")
+                log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f} > 0.2, Signal={sig:.4f}, gap {gap_pct:.1f}% ≥ 40% → buying @ {limit:.2f}🟢🟢🟢")
                 place_buy(sym, limit, remaining_budget[sym])
                 last_trade_time[sym] = now
                 log(f"Updated last_trade_time for {sym} to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
-            else: 
-                log(f"💀💀💀 All Checks Passed for BUY {sym} but MACD is not increasing so skipping buy💀💀💀")     
+            else:
+                log(f"💀💀💀 All Checks Passed for BUY {sym} but MACD is not increasing so skipping buy💀💀💀")
         elif macd > sig:
-             
-            # log(f"⚪️ {sym}: MACD>sig but gap {gap_pct:.1f}% < {PERCENT_THRESHOLD*100:.1f}%, skipping buy")
+            # log(f"⚪️ {sym}: MACD>sig but conditions not met (MACD={macd:.4f}, gap={gap_pct:.1f}%), skipping buy")
             pass
         else:
             # log(f"⚪️ {sym}: MACD<=Signal ({macd:.4f} <= {sig:.4f}); skipping buy")
