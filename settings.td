@@ -11,6 +11,9 @@ DOLLAR_BUDGETS=NVDA:7000,AAPL:7000,META:7000,MSFT:5000,JPM:5000   # per‑symbol
 MACD_MIN_THRESHOLD=0.2
 MACD_GAP_PERCENT=40
 
+# MACD sell condition: how close two consecutive MACD values need to be to count as "flattening"
+MACD_FLATTEN_THRESHOLD=0.01
+
 # Cooldown in minutes between trades on same symbol
 MIN_TRADE_COOLDOWN_MINUTES=10
 

@@ -51,6 +51,7 @@ TRADE_COOLDOWN_MINUTES = int(os.getenv('MIN_TRADE_COOLDOWN_MINUTES', '9'))
 SYMBOLS = [s.strip().upper() for s in os.getenv('STOCK_LIST', 'AAPL').split(',')]
 MACD_MIN_THRESHOLD = float(os.getenv('MACD_MIN_THRESHOLD', '0.2'))
 MACD_GAP_PERCENT = float(os.getenv('MACD_GAP_PERCENT', '40'))
+MACD_FLATTEN_THRESHOLD = float(os.getenv('MACD_FLATTEN_THRESHOLD', '0.01'))
 WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 
 # ===== Risk Guard config =====
@@ -92,6 +93,9 @@ trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
 
 # State
 dfs = {sym: pd.DataFrame(columns=['timestamp','open','high','low','close','volume']) for sym in SYMBOLS}
+# 3-bar rolling MACD buffer tracked from the moment a position is opened
+_nan = float('nan')
+position_macd_buffer = {sym: [_nan, _nan, _nan] for sym in SYMBOLS}
 # Parse per-symbol budgets from DOLLAR_BUDGETS (e.g. AMD:10000,TSLA:5000)
 # Falls back to DEFAULT_DOLLAR if a symbol is not listed
 _default_dollar = float(os.getenv('DEFAULT_DOLLAR', '0'))
@@ -146,6 +150,45 @@ def is_macd_monotonically_increasing(sym: str) -> bool:
     
     # Check if values are strictly increasing: buffer[2] > buffer[1] > buffer[0]
     return buffer[2] > buffer[1] > buffer[0]
+
+def update_position_macd_buffer(sym: str, macd: float):
+    """
+    Update the 3-bar rolling MACD buffer for a held position.
+    Fills slots left to right until full, then shifts oldest out.
+    """
+    buf = position_macd_buffer[sym]
+    nan = float('nan')
+    if buf[0] != buf[0]:        # buf[0] is NaN — buffer empty
+        position_macd_buffer[sym] = [macd, nan, nan]
+    elif buf[1] != buf[1]:      # buf[1] is NaN — one value stored
+        position_macd_buffer[sym] = [buf[0], macd, nan]
+    elif buf[2] != buf[2]:      # buf[2] is NaN — two values stored
+        position_macd_buffer[sym] = [buf[0], buf[1], macd]
+    else:                        # Buffer full — shift left, append new
+        position_macd_buffer[sym] = [buf[1], buf[2], macd]
+
+def reset_position_macd_buffer(sym: str):
+    """Reset position MACD buffer when a position is closed."""
+    nan = float('nan')
+    position_macd_buffer[sym] = [nan, nan, nan]
+
+def check_macd_exit(sym: str) -> tuple:
+    """
+    Returns (should_sell, reason).
+    Requires 3 bars of data. Holds if monotonically increasing.
+    Sells if flattening (current ≈ previous) or declining.
+    """
+    buf = position_macd_buffer[sym]
+    if any(v != v for v in buf):   # NaN present — not enough data yet
+        return False, ""
+    b0, b1, b2 = buf
+    if b0 < b1 < b2:               # Monotonically increasing — hold
+        return False, ""
+    diff = b2 - b1
+    if abs(diff) < MACD_FLATTEN_THRESHOLD:
+        return True, f"flattening (Δ={diff:.4f}, threshold=±{MACD_FLATTEN_THRESHOLD})"
+    else:
+        return True, f"declining ({b1:.4f} → {b2:.4f})"
 
 def _get_macd_neutral_threshold(sym: str) -> float:
     """
@@ -514,6 +557,11 @@ async def handle_bar(bar: dict):
             log(f"⚠️ Could not fetch position for {sym}: {err}")
         pos = 0
 
+    # Update position MACD buffer every bar while holding
+    if pos > 0:
+        update_position_macd_buffer(sym, macd)
+        log(f"📈 {sym} position MACD buffer: {[f'{v:.4f}' if v == v else 'nan' for v in position_macd_buffer[sym]]}")
+
     # STOP-LOSS: if holding and unrealized P&L has gone negative, market sell immediately
     if pos > 0 and pos_obj is not None:
         try:
@@ -526,6 +574,7 @@ async def handle_bar(bar: dict):
                 log(f"🛑🛑🛑 STOP-LOSS {sym}: unrealized P&L {unrealized_plpc:.2f}% < -{STOP_LOSS_PERCENT}%, market selling {pos} shares immediately 🛑🛑🛑")
                 place_sell_market(sym, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
+                reset_position_macd_buffer(sym)
                 log(f"✅ Stop-loss executed for {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
                 return
             # else:
@@ -601,6 +650,7 @@ async def handle_bar(bar: dict):
                     log(f"🔴 Market sell {sym}: {pos} shares @ market")
                     place_sell_market(sym, pos)
                     last_trade_time[sym] = datetime.now(timezone.utc)
+                    reset_position_macd_buffer(sym)
                     log(f"✅ Market sell placed for {sym}, updated tracking")
                     return  # Exit early since we've handled the sell
                 except Exception as e:
@@ -625,6 +675,7 @@ async def handle_bar(bar: dict):
                 log(f"🔴🔴🔴 TAKE-PROFIT {sym}: P&L ${unrealized_pl:.2f} >= ${dollar_threshold:.2f}, selling {pos} @ {bid:.2f}🔴🔴🔴")
                 place_sell(sym, bid, pos)
                 last_trade_time[sym] = datetime.now(timezone.utc)
+                reset_position_macd_buffer(sym)
                 log(f"✅ Take-profit sold {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
                 return
             # else:
@@ -632,15 +683,17 @@ async def handle_bar(bar: dict):
         except Exception as e:
             log(f"⚠️ Error checking profit for {sym}: {e}")
 
-    # MACD BEARISH CROSSOVER EXIT: sell if MACD has crossed below signal while holding
+    # MACD EXIT: sell if position MACD buffer is no longer monotonically increasing
     if pos > 0:
-        if macd < sig:
+        should_sell, reason = check_macd_exit(sym)
+        if should_sell:
             if STOP_TRADING:
                 log(f"[RiskGuard] Blocked MACD-EXIT SELL {sym} x{pos} (trading halted)")
                 return
-            log(f"🔴🔴🔴 MACD EXIT {sym}: MACD {macd:.4f} < Signal {sig:.4f}, selling {pos} shares 🔴🔴🔴")
+            log(f"🔴🔴🔴 MACD EXIT {sym}: {reason} | buffer={[f'{v:.4f}' if v == v else 'nan' for v in position_macd_buffer[sym]]} | selling {pos} shares 🔴🔴🔴")
             place_sell_market(sym, pos)
             last_trade_time[sym] = datetime.now(timezone.utc)
+            reset_position_macd_buffer(sym)
             log(f"✅ MACD exit sold {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
         return
 
@@ -676,6 +729,8 @@ async def handle_bar(bar: dict):
                 log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f} > {MACD_MIN_THRESHOLD}, Signal={sig:.4f}, gap {gap_pct:.1f}% ≥ {MACD_GAP_PERCENT}% → buying @ {limit:.2f}🟢🟢🟢")
                 place_buy(sym, limit, remaining_budget[sym])
                 last_trade_time[sym] = now
+                position_macd_buffer[sym] = [macd, float('nan'), float('nan')]
+                log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan]")
                 log(f"Updated last_trade_time for {sym} to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
             else:
                 log(f"💀💀💀 All Checks Passed for BUY {sym} but MACD is not increasing so skipping buy💀💀💀")
