@@ -52,6 +52,9 @@ SYMBOLS = [s.strip().upper() for s in os.getenv('STOCK_LIST', 'AAPL').split(',')
 MACD_MIN_THRESHOLD = float(os.getenv('MACD_MIN_THRESHOLD', '0.2'))
 MACD_GAP_PERCENT = float(os.getenv('MACD_GAP_PERCENT', '40'))
 MACD_FLATTEN_THRESHOLD = float(os.getenv('MACD_FLATTEN_THRESHOLD', '0.01'))
+RSI_PERIOD = int(os.getenv('RSI_PERIOD', '9'))
+RSI_BUY_MIN = float(os.getenv('RSI_BUY_MIN', '50'))
+RSI_BUY_MAX = float(os.getenv('RSI_BUY_MAX', '65'))
 WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 
 # ===== Risk Guard config =====
@@ -120,6 +123,9 @@ _last_delimiter_minute = None
 # MACD buffer for trend analysis - stores last 3 MACD values for each symbol
 macd_buffer = {sym: [] for sym in SYMBOLS}
 MACD_BUFFER_SIZE = 3
+# RSI buffer for trend analysis - stores last 3 RSI values for each symbol
+rsi_buffer = {sym: [] for sym in SYMBOLS}
+RSI_BUFFER_SIZE = 3
 
 def update_macd_buffer(sym: str, macd_value: float):
     """
@@ -149,6 +155,23 @@ def is_macd_monotonically_increasing(sym: str) -> bool:
         return False
     
     # Check if values are strictly increasing: buffer[2] > buffer[1] > buffer[0]
+    return buffer[2] > buffer[1] > buffer[0]
+
+def update_rsi_buffer(sym: str, rsi_value: float):
+    """Update the RSI buffer, maintaining a fixed size of RSI_BUFFER_SIZE."""
+    if sym not in rsi_buffer:
+        rsi_buffer[sym] = []
+    buffer = rsi_buffer[sym]
+    buffer.append(rsi_value)
+    if len(buffer) > RSI_BUFFER_SIZE:
+        buffer.pop(0)
+    rsi_buffer[sym] = buffer
+
+def is_rsi_monotonically_increasing(sym: str) -> bool:
+    """Returns True if the last 3 RSI values are strictly increasing."""
+    buffer = rsi_buffer.get(sym, [])
+    if len(buffer) < RSI_BUFFER_SIZE:
+        return False
     return buffer[2] > buffer[1] > buffer[0]
 
 def update_position_macd_buffer(sym: str, macd: float):
@@ -405,17 +428,26 @@ def fetch_quote(sym: str) -> tuple:
 # === Technical Indicators ===
 def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute MACD and Signal line on a DataFrame with a 'close' column.
-    Adds columns: 'macd' and 'macd_signal' and returns the DataFrame.
+    Compute MACD, Signal line, and RSI on a DataFrame with a 'close' column.
+    Adds columns: 'macd', 'macd_signal', 'rsi' and returns the DataFrame.
     """
-    # Use standard 12/26/9 EMA configuration
+    # MACD: standard 12/26/9 EMA configuration
     exp1 = df['close'].ewm(span=12, adjust=False).mean()
     exp2 = df['close'].ewm(span=26, adjust=False).mean()
     macd = exp1 - exp2
     sig = macd.ewm(span=9, adjust=False).mean()
+    # RSI: Wilder's smoothing method
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1/RSI_PERIOD, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/RSI_PERIOD, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, float('nan'))
+    rsi = 100 - (100 / (1 + rs))
     out = df.copy()
     out['macd'] = macd
     out['macd_signal'] = sig
+    out['rsi'] = rsi
     return out
 
 
@@ -534,13 +566,19 @@ async def handle_bar(bar: dict):
     df = pd.concat([dfs[sym], pd.DataFrame([row])], ignore_index=True).tail(1000)
     dfs[sym] = df = compute_macd(df)
     macd, sig = df.iloc[-1]['macd'], df.iloc[-1]['macd_signal']
-    
+    rsi_val = df.iloc[-1]['rsi']
+
     # Update MACD buffer and check trend
     update_macd_buffer(sym, macd)
     is_increasing = is_macd_monotonically_increasing(sym)
     buffer_values = macd_buffer[sym]
-    
-    log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}")
+
+    # Update RSI buffer and check trend
+    update_rsi_buffer(sym, rsi_val)
+    rsi_increasing = is_rsi_monotonically_increasing(sym)
+    rsi_in_zone = RSI_BUY_MIN <= rsi_val <= RSI_BUY_MAX
+
+    log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}, RSI={rsi_val:.2f}")
     # log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
 
     # Position check
@@ -723,17 +761,21 @@ async def handle_bar(bar: dict):
                 log(f"[RiskGuard] Blocked BUY {sym} (trading halted)")
                 return
 
-            if is_increasing:
+            if not is_increasing:
+                log(f"💀 {sym}: Skipping BUY — MACD not monotonically increasing {[f'{v:.4f}' for v in macd_buffer[sym]]}")
+            elif not rsi_in_zone:
+                log(f"💀 {sym}: Skipping BUY — RSI {rsi_val:.2f} not in zone [{RSI_BUY_MIN}-{RSI_BUY_MAX}]")
+            elif not rsi_increasing:
+                log(f"💀 {sym}: Skipping BUY — RSI not rising {[f'{v:.2f}' for v in rsi_buffer[sym]]}")
+            else:
                 bid, _ = fetch_quote(sym)
                 limit = round(bid + 0.01, 2)
-                log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f} > {MACD_MIN_THRESHOLD}, Signal={sig:.4f}, gap {gap_pct:.1f}% ≥ {MACD_GAP_PERCENT}% → buying @ {limit:.2f}🟢🟢🟢")
+                log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f} > {MACD_MIN_THRESHOLD}, gap={gap_pct:.1f}% ≥ {MACD_GAP_PERCENT}%, RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] rising → buying @ {limit:.2f}🟢🟢🟢")
                 place_buy(sym, limit, remaining_budget[sym])
                 last_trade_time[sym] = now
                 position_macd_buffer[sym] = [macd, float('nan'), float('nan')]
                 log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan]")
                 log(f"Updated last_trade_time for {sym} to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
-            else:
-                log(f"💀💀💀 All Checks Passed for BUY {sym} but MACD is not increasing so skipping buy💀💀💀")
         elif macd > sig:
             # log(f"⚪️ {sym}: MACD>sig but conditions not met (MACD={macd:.4f}, gap={gap_pct:.1f}%), skipping buy")
             pass

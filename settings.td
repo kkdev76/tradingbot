@@ -14,6 +14,11 @@ MACD_GAP_PERCENT=40
 # MACD sell condition: how close two consecutive MACD values need to be to count as "flattening"
 MACD_FLATTEN_THRESHOLD=0.01
 
+# RSI buy conditions
+RSI_PERIOD=9
+RSI_BUY_MIN=50
+RSI_BUY_MAX=65
+
 # Cooldown in minutes between trades on same symbol
 MIN_TRADE_COOLDOWN_MINUTES=10
 
