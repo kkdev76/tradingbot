@@ -439,19 +439,19 @@ def _get_indicator_writer(sym: str):
         f = open(filepath, 'a', newline='', encoding='utf-8')
         writer = csv.writer(f)
         if is_new:
-            writer.writerow(['timestamp', 'MACD', 'Signal', 'RSI'])
+            writer.writerow(['timestamp', 'close', 'MACD', 'Signal', 'RSI'])
             f.flush()
         _indicator_log_writers[sym] = writer
         _indicator_log_files[sym] = f
         log(f"📁 Indicator log opened: {filepath}")
     return _indicator_log_writers[sym]
 
-def _log_indicators(sym: str, ts, macd: float, sig: float, rsi: float):
+def _log_indicators(sym: str, ts, close: float, macd: float, sig: float, rsi: float):
     """Append one row to the per-symbol indicator CSV."""
     try:
         writer = _get_indicator_writer(sym)
         ts_pt = ts.astimezone(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%dT%H:%M:%S')
-        writer.writerow([ts_pt, f'{macd:.4f}', f'{sig:.4f}', f'{rsi:.2f}'])
+        writer.writerow([ts_pt, f'{close:.4f}', f'{macd:.4f}', f'{sig:.4f}', f'{rsi:.2f}'])
         _indicator_log_files[sym].flush()
     except Exception as e:
         log(f"⚠️ Failed to write indicator log for {sym}: {e}")
@@ -611,7 +611,8 @@ async def handle_bar(bar: dict):
     rsi_in_zone = RSI_BUY_MIN <= rsi_val <= RSI_BUY_MAX
 
     # Log indicators to per-symbol CSV
-    _log_indicators(sym, ts, macd, sig, rsi_val)
+    close_price = float(df.iloc[-1]['close'])
+    _log_indicators(sym, ts, close_price, macd, sig, rsi_val)
 
     log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}, RSI={rsi_val:.2f}")
     # log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
