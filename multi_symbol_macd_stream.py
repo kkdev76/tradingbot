@@ -50,7 +50,6 @@ API_KEY = os.getenv('APCA_API_KEY_ID')
 SECRET_KEY = os.getenv('APCA_API_SECRET_KEY')
 TRADE_COOLDOWN_MINUTES = int(os.getenv('MIN_TRADE_COOLDOWN_MINUTES', '9'))
 SYMBOLS = [s.strip().upper() for s in os.getenv('STOCK_LIST', 'AAPL').split(',')]
-MACD_MIN_THRESHOLD = float(os.getenv('MACD_MIN_THRESHOLD', '0.2'))
 MACD_GAP_PERCENT = float(os.getenv('MACD_GAP_PERCENT', '40'))
 MACD_FLATTEN_THRESHOLD = float(os.getenv('MACD_FLATTEN_THRESHOLD', '0.01'))
 RSI_PERIOD = int(os.getenv('RSI_PERIOD', '9'))
@@ -785,7 +784,7 @@ async def handle_bar(bar: dict):
 
         gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
         # log(f"BUY check for {sym}: MACD={macd:.4f}, Signal={sig:.4f}, Gap={gap_pct:.2f}%")
-        if macd > MACD_MIN_THRESHOLD and gap_pct > MACD_GAP_PERCENT:
+        if gap_pct > MACD_GAP_PERCENT:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
             # log(f"⏳ Cooldown check for {sym}: elapsed {elapsed:.1f} min (threshold {TRADE_COOLDOWN_MINUTES} min)")
@@ -806,7 +805,7 @@ async def handle_bar(bar: dict):
             else:
                 bid, _ = fetch_quote(sym)
                 limit = round(bid + 0.01, 2)
-                log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f} > {MACD_MIN_THRESHOLD}, gap={gap_pct:.1f}% ≥ {MACD_GAP_PERCENT}%, RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] rising → buying @ {limit:.2f}🟢🟢🟢")
+                log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, gap={gap_pct:.1f}% ≥ {MACD_GAP_PERCENT}%, RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] rising → buying @ {limit:.2f}🟢🟢🟢")
                 place_buy(sym, limit, remaining_budget[sym])
                 last_trade_time[sym] = now
                 position_macd_buffer[sym] = [macd, float('nan'), float('nan')]

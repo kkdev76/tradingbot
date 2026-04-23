@@ -8,7 +8,6 @@ DEFAULT_DOLLAR=5000
 DOLLAR_BUDGETS=NVDA:7000,AAPL:7000,META:7000,MSFT:5000,JPM:5000   # per‑symbol overrides
 
 # MACD buy conditions
-MACD_MIN_THRESHOLD=0.2
 MACD_GAP_PERCENT=40
 
 # MACD sell condition: how close two consecutive MACD values need to be to count as "flattening"
