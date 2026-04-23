@@ -1,4 +1,5 @@
 import os
+import csv
 import json
 import requests
 import pandas as pd
@@ -424,6 +425,38 @@ def fetch_quote(sym: str) -> tuple:
     """Return the most recent bid and ask from the websocket cache."""
     return latest_quote.get(sym, (0.0, 0.0))
 
+# ===== Per-symbol indicator CSV logging =====
+_INDICATOR_LOG_DIR = 'indicator_logs'
+_indicator_log_writers = {}   # sym -> csv.writer
+_indicator_log_files   = {}   # sym -> file handle
+
+def _get_indicator_writer(sym: str):
+    """Return (creating if needed) the CSV writer for a symbol."""
+    if sym not in _indicator_log_writers:
+        os.makedirs(_INDICATOR_LOG_DIR, exist_ok=True)
+        date_str = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d')
+        filepath = os.path.join(_INDICATOR_LOG_DIR, f"{sym}_{date_str}.csv")
+        is_new = not os.path.exists(filepath) or os.path.getsize(filepath) == 0
+        f = open(filepath, 'a', newline='', encoding='utf-8')
+        writer = csv.writer(f)
+        if is_new:
+            writer.writerow(['timestamp', 'MACD', 'Signal', 'RSI'])
+            f.flush()
+        _indicator_log_writers[sym] = writer
+        _indicator_log_files[sym] = f
+        log(f"📁 Indicator log opened: {filepath}")
+    return _indicator_log_writers[sym]
+
+def _log_indicators(sym: str, ts, macd: float, sig: float, rsi: float):
+    """Append one row to the per-symbol indicator CSV."""
+    try:
+        writer = _get_indicator_writer(sym)
+        ts_pt = ts.astimezone(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%dT%H:%M:%S')
+        writer.writerow([ts_pt, f'{macd:.4f}', f'{sig:.4f}', f'{rsi:.2f}'])
+        _indicator_log_files[sym].flush()
+    except Exception as e:
+        log(f"⚠️ Failed to write indicator log for {sym}: {e}")
+
 # Bootstrap historical bars
 # === Technical Indicators ===
 def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
@@ -577,6 +610,9 @@ async def handle_bar(bar: dict):
     update_rsi_buffer(sym, rsi_val)
     rsi_increasing = is_rsi_monotonically_increasing(sym)
     rsi_in_zone = RSI_BUY_MIN <= rsi_val <= RSI_BUY_MAX
+
+    # Log indicators to per-symbol CSV
+    _log_indicators(sym, ts, macd, sig, rsi_val)
 
     log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}, RSI={rsi_val:.2f}")
     # log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
