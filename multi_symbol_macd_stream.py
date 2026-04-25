@@ -661,6 +661,15 @@ async def handle_bar(bar: dict):
 
 
     ts = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
+
+    # Drop pre-market / after-hours bars — keeps live indicators aligned with
+    # TradingView and ProRealTime which compute on regular session only.
+    _ET = ZoneInfo("America/New_York")
+    ts_et = ts.astimezone(_ET).time()
+    if not (datetime_time(9, 30) <= ts_et < datetime_time(16, 0)):
+        log(f"⏭️  {sym}: skipping extended-hours bar at {ts_et}")
+        return
+
     # Append bar and compute MACD
     row = {'timestamp': ts, 'open': bar['o'], 'high': bar['h'], 'low': bar['l'], 'close': bar['c'], 'volume': bar['v']}
     df = pd.concat([dfs[sym], pd.DataFrame([row])], ignore_index=True).tail(1000)
