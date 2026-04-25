@@ -123,12 +123,12 @@ latest_quote = {sym: (0.0, 0.0) for sym in SYMBOLS}
 _macd_neutral_cache = {}
 _last_delimiter_minute = None
 
-# MACD buffer for trend analysis - stores last 3 MACD values for each symbol
+# MACD buffer for trend analysis - stores last 5 MACD values for each symbol
 macd_buffer = {sym: [] for sym in SYMBOLS}
-MACD_BUFFER_SIZE = 3
-# RSI buffer for trend analysis - stores last 3 RSI values for each symbol
+MACD_BUFFER_SIZE = 5
+# RSI buffer for trend analysis - stores last 5 RSI values for each symbol
 rsi_buffer = {sym: [] for sym in SYMBOLS}
-RSI_BUFFER_SIZE = 3
+RSI_BUFFER_SIZE = 5
 
 def update_macd_buffer(sym: str, macd_value: float):
     """
@@ -149,16 +149,16 @@ def update_macd_buffer(sym: str, macd_value: float):
 
 def is_macd_monotonically_increasing(sym: str) -> bool:
     """
-    Check if the last 3 MACD values in the buffer are monotonically increasing.
-    Returns True if current > previous > previous_previous, False otherwise.
-    Requires at least 3 values in buffer to return True.
+    Check if all 5 MACD values in the buffer are monotonically increasing.
+    Returns True only if each value is strictly greater than the previous.
+    Requires at least MACD_BUFFER_SIZE (5) values in buffer to return True.
     """
     buffer = macd_buffer.get(sym, [])
     if len(buffer) < MACD_BUFFER_SIZE:
         return False
-    
-    # Check if values are strictly increasing: buffer[2] > buffer[1] > buffer[0]
-    return buffer[2] > buffer[1] > buffer[0]
+
+    # Check if values are strictly increasing across all 5 bars
+    return buffer[4] > buffer[3] > buffer[2] > buffer[1] > buffer[0]
 
 def update_rsi_buffer(sym: str, rsi_value: float):
     """Update the RSI buffer, maintaining a fixed size of RSI_BUFFER_SIZE."""
@@ -171,11 +171,15 @@ def update_rsi_buffer(sym: str, rsi_value: float):
     rsi_buffer[sym] = buffer
 
 def is_rsi_monotonically_increasing(sym: str) -> bool:
-    """Returns True if the last 3 RSI values are strictly increasing."""
+    """
+    Stability check: returns True if all 5 RSI values in the buffer are >= RSI_BUY_MIN (50).
+    Ensures RSI has been solidly above the buy floor for 5 consecutive bars, not just a brief spike.
+    Requires at least RSI_BUFFER_SIZE (5) values in buffer to return True.
+    """
     buffer = rsi_buffer.get(sym, [])
     if len(buffer) < RSI_BUFFER_SIZE:
         return False
-    return buffer[2] > buffer[1] > buffer[0]
+    return all(v >= RSI_BUY_MIN for v in buffer)
 
 def update_position_macd_buffer(sym: str, macd: float):
     """
