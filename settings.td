@@ -31,12 +31,12 @@ MACD_NEUTRAL_DEFAULT=0.20
 HISTORICAL_FEED=sip
 # Use raw adjustments for intraday indicator consistency (raw, split, dividend, all)
 HISTORICAL_ADJUSTMENT=raw
-# Number of most recent 1-min bars to bootstrap MACD
-BOOTSTRAP_BAR_COUNT=120
+# Number of most recent 1-min bars to bootstrap MACD (~2 full trading days = 800)
+BOOTSTRAP_BAR_COUNT=800
 # Maximum days to look back when fetching historical bars in one request
 BOOTSTRAP_MAX_DAYS_BACK=5
-# Minimum bars required before enabling trading decisions (warm-up)
-MACD_WARMUP_BARS=78
+# Minimum bars required before enabling trading decisions (26+9=35 with SMA-seeded EMA)
+MACD_WARMUP_BARS=35
 
 # Take-profit: sell when unrealized P&L % reaches this threshold (per-symbol)
 PROFIT_TAKE_NVDA=0.4

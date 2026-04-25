@@ -55,6 +55,9 @@ MACD_FLATTEN_THRESHOLD = float(os.getenv('MACD_FLATTEN_THRESHOLD', '0.01'))
 RSI_PERIOD = int(os.getenv('RSI_PERIOD', '9'))
 RSI_BUY_MIN = float(os.getenv('RSI_BUY_MIN', '50'))
 RSI_BUY_MAX = float(os.getenv('RSI_BUY_MAX', '65'))
+BOOTSTRAP_BAR_COUNT  = int(os.getenv('BOOTSTRAP_BAR_COUNT', '800'))
+BOOTSTRAP_MAX_DAYS_BACK = int(os.getenv('BOOTSTRAP_MAX_DAYS_BACK', '5'))
+MACD_WARMUP_BARS = int(os.getenv('MACD_WARMUP_BARS', '35'))
 WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 
 # ===== Risk Guard config =====
@@ -519,27 +522,39 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def bootstrap_history(sym: str):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(minutes=120)
-    bars = requests.get(
+    """
+    Fetch the most recent BOOTSTRAP_BAR_COUNT 1-min bars going back up to
+    BOOTSTRAP_MAX_DAYS_BACK calendar days.  Fetching in descending order
+    guarantees we always get the newest N bars regardless of market gaps
+    (weekends, holidays), then reverse to chronological order for EMA calc.
+    """
+    end   = datetime.now(timezone.utc)
+    start = end - timedelta(days=BOOTSTRAP_MAX_DAYS_BACK)
+    resp  = requests.get(
         f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
         headers={'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': SECRET_KEY},
         params={
             'timeframe': '1Min',
-            'start': start.isoformat().replace('+00:00','Z'),
-            'end': end.isoformat().replace('+00:00','Z'),
-            'limit': 120
+            'start':     start.isoformat().replace('+00:00', 'Z'),
+            'end':       end.isoformat().replace('+00:00', 'Z'),
+            'limit':     BOOTSTRAP_BAR_COUNT,
+            'sort':      'desc',   # newest first → we slice head, then reverse
+            'feed':      os.getenv('HISTORICAL_FEED', 'sip'),
+            'adjustment': os.getenv('HISTORICAL_ADJUSTMENT', 'raw'),
         }
-    ).json().get('bars', [])
+    )
+    bars = resp.json().get('bars', [])
     if not bars:
         log(f"⚠️ No history for {sym}")
         return
-    df = pd.DataFrame([{ 
+    # bars are newest-first; reverse to oldest-first for chronological EMA
+    bars = list(reversed(bars))
+    df = pd.DataFrame([{
         'timestamp': pd.to_datetime(b['t']).replace(tzinfo=timezone.utc),
         'open': b['o'], 'high': b['h'], 'low': b['l'], 'close': b['c'], 'volume': b['v']
     } for b in bars])
     dfs[sym] = compute_macd(df)
-    log(f"✅ {sym}: bootstrapped {len(df)} bars.")
+    log(f"✅ {sym}: bootstrapped {len(df)} bars (back {BOOTSTRAP_MAX_DAYS_BACK}d, max {BOOTSTRAP_BAR_COUNT}).")
 
 # Real-time bar handling
 def scheduled_shutdown_guard_check(client: TradingClient):
