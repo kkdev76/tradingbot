@@ -8,7 +8,7 @@ import websockets
 import logging
 import time
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as datetime_time
 from dotenv import load_dotenv
 from buy_order import place_buy
 from sell_order import place_sell, place_sell_market
@@ -549,12 +549,30 @@ def bootstrap_history(sym: str):
         return
     # bars are newest-first; reverse to oldest-first for chronological EMA
     bars = list(reversed(bars))
-    df = pd.DataFrame([{
-        'timestamp': pd.to_datetime(b['t']).replace(tzinfo=timezone.utc),
-        'open': b['o'], 'high': b['h'], 'low': b['l'], 'close': b['c'], 'volume': b['v']
-    } for b in bars])
+
+    ET = ZoneInfo("America/New_York")
+    regular_open  = datetime_time(9, 30)
+    regular_close = datetime_time(16, 0)
+
+    rows = []
+    for b in bars:
+        ts_utc = pd.to_datetime(b['t']).replace(tzinfo=timezone.utc)
+        ts_et  = ts_utc.astimezone(ET)
+        # Keep only regular session bars — matches TradingView / ProRealTime defaults
+        if regular_open <= ts_et.time() < regular_close:
+            rows.append({
+                'timestamp': ts_utc,
+                'open': b['o'], 'high': b['h'], 'low': b['l'],
+                'close': b['c'], 'volume': b['v'],
+            })
+
+    if not rows:
+        log(f"⚠️ No regular-hours history for {sym}")
+        return
+
+    df = pd.DataFrame(rows)
     dfs[sym] = compute_macd(df)
-    log(f"✅ {sym}: bootstrapped {len(df)} bars (back {BOOTSTRAP_MAX_DAYS_BACK}d, max {BOOTSTRAP_BAR_COUNT}).")
+    log(f"✅ {sym}: bootstrapped {len(df)} regular-session bars (back {BOOTSTRAP_MAX_DAYS_BACK}d, max {BOOTSTRAP_BAR_COUNT}).")
 
 # Real-time bar handling
 def scheduled_shutdown_guard_check(client: TradingClient):
