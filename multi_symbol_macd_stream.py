@@ -175,14 +175,14 @@ def update_rsi_buffer(sym: str, rsi_value: float):
 
 def is_rsi_monotonically_increasing(sym: str) -> bool:
     """
-    Stability check: returns True if all 5 RSI values in the buffer are >= RSI_BUY_MIN (50).
-    Ensures RSI has been solidly above the buy floor for 5 consecutive bars, not just a brief spike.
-    Requires at least RSI_BUFFER_SIZE (5) values in buffer to return True.
+    Returns True if:
+      1. All 5 RSI values are >= RSI_BUY_MIN (50) — zone stability
+      2. Current RSI >= previous RSI — not falling through the zone from overbought
     """
     buffer = rsi_buffer.get(sym, [])
     if len(buffer) < RSI_BUFFER_SIZE:
         return False
-    return all(v >= RSI_BUY_MIN for v in buffer)
+    return all(v >= RSI_BUY_MIN for v in buffer) and buffer[-1] >= buffer[-2]
 
 def update_position_macd_buffer(sym: str, macd: float):
     """
