@@ -53,6 +53,7 @@ TRADE_COOLDOWN_MINUTES = int(os.getenv('MIN_TRADE_COOLDOWN_MINUTES', '9'))
 SYMBOLS = [s.strip().upper() for s in os.getenv('STOCK_LIST', 'AAPL').split(',')]
 MACD_GAP_PERCENT = float(os.getenv('MACD_GAP_PERCENT', '40'))
 MACD_MIN_VALUE   = float(os.getenv('MACD_MIN_VALUE', '0.05'))
+MACD_ABS_GAP_MIN = float(os.getenv('MACD_ABS_GAP_MIN', '0.03'))
 MACD_FLATTEN_THRESHOLD = float(os.getenv('MACD_FLATTEN_THRESHOLD', '0.01'))
 RSI_PERIOD = int(os.getenv('RSI_PERIOD', '9'))
 RSI_BUY_MIN = float(os.getenv('RSI_BUY_MIN', '50'))
@@ -867,15 +868,26 @@ async def handle_bar(bar: dict):
         # else:
             # log(f"🧹 No stale open orders to cancel for {sym}")
 
-        gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
         sig_rising = (not math.isnan(sig_prev)) and (sig > sig_prev)
 
-        # Zero-line gates: MACD must be genuinely positive and above noise floor
-        macd_above_zero  = macd > 0
-        macd_above_floor = macd > MACD_MIN_VALUE
-        gap_ok           = gap_pct > MACD_GAP_PERCENT
+        # Two-regime momentum gate:
+        #   Near zero crossover (MACD < MACD_MIN_VALUE): percentage is unreliable because
+        #   abs(signal) is tiny — use absolute gap instead.
+        #   Trending (MACD >= MACD_MIN_VALUE): signal has real magnitude, percentage gap
+        #   correctly measures whether MACD is accelerating away from signal.
+        if macd <= 0:
+            gap_ok = False
+            gap_desc = f"MACD={macd:.4f}<=0"
+        elif macd < MACD_MIN_VALUE:
+            abs_gap = macd - sig
+            gap_ok  = abs_gap > MACD_ABS_GAP_MIN
+            gap_desc = f"crossover regime: abs_gap={abs_gap:.4f} vs min={MACD_ABS_GAP_MIN}"
+        else:
+            gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
+            gap_ok  = gap_pct > MACD_GAP_PERCENT
+            gap_desc = f"trending regime: gap={gap_pct:.1f}% vs min={MACD_GAP_PERCENT}%"
 
-        if macd_above_zero and macd_above_floor and gap_ok and sig_rising:
+        if gap_ok and sig_rising:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
             if elapsed < TRADE_COOLDOWN_MINUTES:
@@ -894,20 +906,16 @@ async def handle_bar(bar: dict):
             else:
                 bid, _ = fetch_quote(sym)
                 limit = round(bid + 0.01, 2)
-                log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f} (>{MACD_MIN_VALUE}), gap={gap_pct:.1f}% ≥ {MACD_GAP_PERCENT}%, Signal rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
+                log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
                 place_buy(sym, limit, remaining_budget[sym])
                 last_trade_time[sym] = now
                 position_macd_buffer[sym] = [macd, float('nan'), float('nan')]
                 log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan]")
                 log(f"Updated last_trade_time for {sym} to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
-        elif macd <= 0:
-            pass  # MACD below zero line — not a buy candidate
-        elif not macd_above_floor:
-            pass  # MACD above zero but below noise floor (< MACD_MIN_VALUE)
         elif not gap_ok:
-            pass  # gap% not wide enough
+            pass  # gap condition not met for current regime
         elif not sig_rising:
-            pass  # Signal not rising — trend not yet confirmed
+            pass  # signal not rising — trend not yet confirmed
         # log(f"🧭 Path exit: BUY evaluation complete for {sym}")
         pass
     else:

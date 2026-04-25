@@ -7,10 +7,12 @@ DEFAULT_DOLLAR=5000
 # Any symbol listed here will use its own budget; others fall back to DEFAULT_DOLLAR
 DOLLAR_BUDGETS=NVDA:7000,AAPL:7000,META:7000,MSFT:5000,JPM:5000   # per‑symbol overrides
 
-# MACD buy conditions
-MACD_GAP_PERCENT=40
-# Minimum absolute MACD value required before gap% is trusted (prevents false signals near zero crossover)
+# MACD buy conditions — two-regime momentum gate:
+#   Crossover regime (0 < MACD < MACD_MIN_VALUE): use absolute gap  (macd - signal) > MACD_ABS_GAP_MIN
+#   Trending regime  (MACD >= MACD_MIN_VALUE):     use percentage gap (macd - signal) / signal > MACD_GAP_PERCENT
 MACD_MIN_VALUE=0.05
+MACD_ABS_GAP_MIN=0.03
+MACD_GAP_PERCENT=40
 
 # MACD sell condition: how close two consecutive MACD values need to be to count as "flattening"
 MACD_FLATTEN_THRESHOLD=0.01
