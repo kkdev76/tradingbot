@@ -9,6 +9,8 @@ DOLLAR_BUDGETS=NVDA:7000,AAPL:7000,META:7000,MSFT:5000,JPM:5000   # per‑symbol
 
 # MACD buy conditions
 MACD_GAP_PERCENT=40
+# Minimum absolute MACD value required before gap% is trusted (prevents false signals near zero crossover)
+MACD_MIN_VALUE=0.05
 
 # MACD sell condition: how close two consecutive MACD values need to be to count as "flattening"
 MACD_FLATTEN_THRESHOLD=0.01
