@@ -247,7 +247,41 @@ def _get_macd_neutral_threshold(sym: str) -> float:
     _macd_neutral_cache[sym] = val
     return val
 
-_profit_take_cache = {}
+_profit_take_cache   = {}
+_macd_min_cache      = {}
+_macd_abs_gap_cache  = {}
+
+def _get_macd_min_value(sym: str) -> float:
+    """Per-symbol MACD_MIN_VALUE. Key: MACD_MIN_VALUE_<SYMBOL>. Falls back to MACD_MIN_VALUE."""
+    if sym in _macd_min_cache:
+        return _macd_min_cache[sym]
+    raw = os.getenv(f"MACD_MIN_VALUE_{sym.upper()}")
+    if raw is None:
+        val = MACD_MIN_VALUE
+    else:
+        try:
+            val = abs(float(raw))
+        except Exception:
+            log(f"⚠️ Invalid MACD_MIN_VALUE_{sym}: '{raw}'. Falling back to {MACD_MIN_VALUE}")
+            val = MACD_MIN_VALUE
+    _macd_min_cache[sym] = val
+    return val
+
+def _get_macd_abs_gap_min(sym: str) -> float:
+    """Per-symbol MACD_ABS_GAP_MIN. Key: MACD_ABS_GAP_MIN_<SYMBOL>. Falls back to MACD_ABS_GAP_MIN."""
+    if sym in _macd_abs_gap_cache:
+        return _macd_abs_gap_cache[sym]
+    raw = os.getenv(f"MACD_ABS_GAP_MIN_{sym.upper()}")
+    if raw is None:
+        val = MACD_ABS_GAP_MIN
+    else:
+        try:
+            val = abs(float(raw))
+        except Exception:
+            log(f"⚠️ Invalid MACD_ABS_GAP_MIN_{sym}: '{raw}'. Falling back to {MACD_ABS_GAP_MIN}")
+            val = MACD_ABS_GAP_MIN
+    _macd_abs_gap_cache[sym] = val
+    return val
 
 def _get_profit_take_percent(sym: str) -> float:
     """
@@ -870,18 +904,21 @@ async def handle_bar(bar: dict):
 
         sig_rising = (not math.isnan(sig_prev)) and (sig > sig_prev)
 
-        # Two-regime momentum gate:
-        #   Near zero crossover (MACD < MACD_MIN_VALUE): percentage is unreliable because
+        # Two-regime momentum gate (thresholds are per-symbol, fall back to global defaults):
+        #   Near zero crossover (MACD < min_val): percentage is unreliable because
         #   abs(signal) is tiny — use absolute gap instead.
-        #   Trending (MACD >= MACD_MIN_VALUE): signal has real magnitude, percentage gap
+        #   Trending (MACD >= min_val): signal has real magnitude, percentage gap
         #   correctly measures whether MACD is accelerating away from signal.
+        min_val     = _get_macd_min_value(sym)
+        abs_gap_min = _get_macd_abs_gap_min(sym)
+
         if macd <= 0:
             gap_ok = False
             gap_desc = f"MACD={macd:.4f}<=0"
-        elif macd < MACD_MIN_VALUE:
+        elif macd < min_val:
             abs_gap = macd - sig
-            gap_ok  = abs_gap > MACD_ABS_GAP_MIN
-            gap_desc = f"crossover regime: abs_gap={abs_gap:.4f} vs min={MACD_ABS_GAP_MIN}"
+            gap_ok  = abs_gap > abs_gap_min
+            gap_desc = f"crossover regime: abs_gap={abs_gap:.4f} vs min={abs_gap_min}"
         else:
             gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
             gap_ok  = gap_pct > MACD_GAP_PERCENT
