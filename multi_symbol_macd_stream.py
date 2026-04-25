@@ -458,28 +458,63 @@ def _log_indicators(sym: str, ts, close: float, macd: float, sig: float, rsi: fl
 
 # Bootstrap historical bars
 # === Technical Indicators ===
+def _sma_seeded_ema(series: pd.Series, period: int) -> pd.Series:
+    """
+    EMA with SMA seed — matches ProRealTime and most professional platforms.
+    First EMA value = SMA of the first `period` bars; exponential from there.
+    pandas ewm(adjust=False) seeds from bar-1 instead, causing divergence.
+    """
+    k = 2.0 / (period + 1)
+    vals = series.to_numpy(dtype=float)
+    out = [float('nan')] * len(vals)
+    if len(vals) < period:
+        return pd.Series(out, index=series.index)
+    out[period - 1] = float(sum(vals[:period]) / period)   # SMA seed
+    for i in range(period, len(vals)):
+        out[i] = vals[i] * k + out[i - 1] * (1 - k)
+    return pd.Series(out, index=series.index)
+
+
+def _wilder_rsi(series: pd.Series, period: int) -> pd.Series:
+    """
+    RSI using Wilder's smoothing with SMA seed — matches ProRealTime.
+    First avg_gain/avg_loss = SMA of first `period` gains/losses.
+    Subsequent values use Wilder's: avg = (prev * (period-1) + current) / period.
+    """
+    delta = series.diff()
+    gain = delta.clip(lower=0).to_numpy(dtype=float)
+    loss = (-delta.clip(upper=0)).to_numpy(dtype=float)
+    n = len(series)
+    avg_g = [float('nan')] * n
+    avg_l = [float('nan')] * n
+    if n < period + 1:
+        return pd.Series([float('nan')] * n, index=series.index)
+    # SMA seed over first `period` gain/loss values (indices 1..period, since diff NaN at 0)
+    avg_g[period] = float(sum(gain[1:period + 1]) / period)
+    avg_l[period] = float(sum(loss[1:period + 1]) / period)
+    for i in range(period + 1, n):
+        avg_g[i] = (avg_g[i - 1] * (period - 1) + gain[i]) / period
+        avg_l[i] = (avg_l[i - 1] * (period - 1) + loss[i]) / period
+    rs = [ag / al if al else float('nan') for ag, al in zip(avg_g, avg_l)]
+    rsi = [100 - (100 / (1 + r)) if r == r else float('nan') for r in rs]
+    return pd.Series(rsi, index=series.index)
+
+
 def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
     """
     Compute MACD, Signal line, and RSI on a DataFrame with a 'close' column.
+    Uses SMA-seeded EMA to match ProRealTime / TradingView / standard platforms.
     Adds columns: 'macd', 'macd_signal', 'rsi' and returns the DataFrame.
     """
-    # MACD: standard 12/26/9 EMA configuration
-    exp1 = df['close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close'].ewm(span=26, adjust=False).mean()
+    exp1 = _sma_seeded_ema(df['close'], 12)
+    exp2 = _sma_seeded_ema(df['close'], 26)
     macd = exp1 - exp2
-    sig = macd.ewm(span=9, adjust=False).mean()
-    # RSI: Wilder's smoothing method
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1/RSI_PERIOD, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/RSI_PERIOD, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, float('nan'))
-    rsi = 100 - (100 / (1 + rs))
+    sig  = _sma_seeded_ema(macd.fillna(method='ffill'), 9)
+    rsi  = _wilder_rsi(df['close'], RSI_PERIOD)
     out = df.copy()
-    out['macd'] = macd
+    out['macd']        = macd
     out['macd_signal'] = sig
-    out['rsi'] = rsi
+    out['rsi']         = rsi
     return out
 
 
