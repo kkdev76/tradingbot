@@ -575,53 +575,63 @@ def bootstrap_history(sym: str):
     BOOTSTRAP_MAX_DAYS_BACK calendar days.  Fetching in descending order
     guarantees we always get the newest N bars regardless of market gaps
     (weekends, holidays), then reverse to chronological order for EMA calc.
+    If the request fails or times out, logs a warning and leaves dfs[sym]
+    empty — the bot will warm up from live bars instead (takes ~35 minutes).
     """
-    end   = datetime.now(timezone.utc)
-    start = end - timedelta(days=BOOTSTRAP_MAX_DAYS_BACK)
-    resp  = requests.get(
-        f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
-        headers={'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': SECRET_KEY},
-        timeout=15,
-        params={
-            'timeframe': '1Min',
-            'start':     start.isoformat().replace('+00:00', 'Z'),
-            'end':       end.isoformat().replace('+00:00', 'Z'),
-            'limit':     BOOTSTRAP_BAR_COUNT,
-            'sort':      'desc',   # newest first → we slice head, then reverse
-            'feed':      os.getenv('HISTORICAL_FEED', 'sip'),
-            'adjustment': os.getenv('HISTORICAL_ADJUSTMENT', 'raw'),
-        }
-    )
-    bars = resp.json().get('bars', [])
-    if not bars:
-        log(f"⚠️ No history for {sym}")
-        return
-    # bars are newest-first; reverse to oldest-first for chronological EMA
-    bars = list(reversed(bars))
+    try:
+        end   = datetime.now(timezone.utc)
+        start = end - timedelta(days=BOOTSTRAP_MAX_DAYS_BACK)
+        resp  = requests.get(
+            f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
+            headers={'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': SECRET_KEY},
+            timeout=15,
+            params={
+                'timeframe': '1Min',
+                'start':     start.isoformat().replace('+00:00', 'Z'),
+                'end':       end.isoformat().replace('+00:00', 'Z'),
+                'limit':     BOOTSTRAP_BAR_COUNT,
+                'sort':      'desc',   # newest first → we slice head, then reverse
+                'feed':      os.getenv('HISTORICAL_FEED', 'sip'),
+                'adjustment': os.getenv('HISTORICAL_ADJUSTMENT', 'raw'),
+            }
+        )
+        bars = resp.json().get('bars', [])
+        if not bars:
+            log(f"⚠️ {sym}: No history returned — will warm up from live bars.")
+            return
+        # bars are newest-first; reverse to oldest-first for chronological EMA
+        bars = list(reversed(bars))
 
-    ET = ZoneInfo("America/New_York")
-    regular_open  = datetime_time(9, 30)
-    regular_close = datetime_time(16, 0)
+        ET = ZoneInfo("America/New_York")
+        regular_open  = datetime_time(9, 30)
+        regular_close = datetime_time(16, 0)
 
-    rows = []
-    for b in bars:
-        ts_utc = pd.to_datetime(b['t']).replace(tzinfo=timezone.utc)
-        ts_et  = ts_utc.astimezone(ET)
-        # Keep only regular session bars — matches TradingView / ProRealTime defaults
-        if regular_open <= ts_et.time() < regular_close:
-            rows.append({
-                'timestamp': ts_utc,
-                'open': b['o'], 'high': b['h'], 'low': b['l'],
-                'close': b['c'], 'volume': b['v'],
-            })
+        rows = []
+        for b in bars:
+            ts_utc = pd.to_datetime(b['t']).replace(tzinfo=timezone.utc)
+            ts_et  = ts_utc.astimezone(ET)
+            # Keep only regular session bars — matches TradingView / ProRealTime defaults
+            if regular_open <= ts_et.time() < regular_close:
+                rows.append({
+                    'timestamp': ts_utc,
+                    'open': b['o'], 'high': b['h'], 'low': b['l'],
+                    'close': b['c'], 'volume': b['v'],
+                })
 
-    if not rows:
-        log(f"⚠️ No regular-hours history for {sym}")
-        return
+        if not rows:
+            log(f"⚠️ {sym}: No regular-hours bars in response — will warm up from live bars.")
+            return
 
-    df = pd.DataFrame(rows)
-    dfs[sym] = compute_macd(df)
-    log(f"✅ {sym}: bootstrapped {len(df)} regular-session bars (back {BOOTSTRAP_MAX_DAYS_BACK}d, max {BOOTSTRAP_BAR_COUNT}).")
+        df = pd.DataFrame(rows)
+        dfs[sym] = compute_macd(df)
+        log(f"✅ {sym}: bootstrapped {len(df)} regular-session bars (back {BOOTSTRAP_MAX_DAYS_BACK}d, max {BOOTSTRAP_BAR_COUNT}).")
+
+    except requests.exceptions.Timeout:
+        log(f"⚠️ {sym}: Bootstrap timed out — will warm up from live bars (~35 min).")
+    except requests.exceptions.ConnectionError as e:
+        log(f"⚠️ {sym}: Bootstrap connection error ({e}) — will warm up from live bars.")
+    except Exception as e:
+        log(f"⚠️ {sym}: Bootstrap failed ({e}) — will warm up from live bars.")
 
 # Real-time bar handling
 def scheduled_shutdown_guard_check(client: TradingClient):
