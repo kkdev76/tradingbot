@@ -581,6 +581,7 @@ def bootstrap_history(sym: str):
     resp  = requests.get(
         f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
         headers={'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': SECRET_KEY},
+        timeout=15,
         params={
             'timeframe': '1Min',
             'start':     start.isoformat().replace('+00:00', 'Z'),
@@ -894,10 +895,13 @@ async def handle_bar(bar: dict):
                 log(f"[RiskGuard] Blocked MACD-EXIT SELL {sym} x{pos} (trading halted)")
                 return
             log(f"🔴🔴🔴 MACD EXIT {sym}: {reason} | buffer={[f'{v:.4f}' if v == v else 'nan' for v in position_macd_buffer[sym]]} | selling {pos} shares 🔴🔴🔴")
-            place_sell_market(sym, pos)
-            last_trade_time[sym] = datetime.now(timezone.utc)
-            reset_position_macd_buffer(sym)
-            log(f"✅ MACD exit sold {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
+            try:
+                place_sell_market(sym, pos)
+                last_trade_time[sym] = datetime.now(timezone.utc)
+                reset_position_macd_buffer(sym)
+                log(f"✅ MACD exit sold {sym}. Updated last_trade_time to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
+            except Exception as e:
+                log(f"❌ MACD exit sell failed for {sym}: {e}")
         return
 
     # BUY logic with cooldown
@@ -952,13 +956,19 @@ async def handle_bar(bar: dict):
                 log(f"💀 {sym}: Skipping BUY — RSI not stable ≥{RSI_BUY_MIN} {[f'{v:.2f}' for v in rsi_buffer[sym]]}")
             else:
                 bid, _ = fetch_quote(sym)
-                limit = round(bid + 0.01, 2)
-                log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
-                place_buy(sym, limit, remaining_budget[sym])
-                last_trade_time[sym] = now
-                position_macd_buffer[sym] = [macd, float('nan'), float('nan')]
-                log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan]")
-                log(f"Updated last_trade_time for {sym} to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
+                if bid <= 0:
+                    log(f"⚠️ {sym}: Skipping BUY — no valid quote yet (bid={bid})")
+                else:
+                    limit = round(bid + 0.01, 2)
+                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
+                    try:
+                        place_buy(sym, limit, remaining_budget[sym])
+                        last_trade_time[sym] = now
+                        position_macd_buffer[sym] = [macd, float('nan'), float('nan')]
+                        log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan]")
+                        log(f"Updated last_trade_time for {sym} to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
+                    except Exception as e:
+                        log(f"❌ BUY order failed for {sym}: {e}")
         elif not gap_ok:
             pass  # gap condition not met for current regime
         elif not sig_rising:
