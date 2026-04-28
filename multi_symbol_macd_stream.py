@@ -505,16 +505,23 @@ def _log_indicators(sym: str, ts, close: float, macd: float, sig: float, rsi: fl
 def _sma_seeded_ema(series: pd.Series, period: int) -> pd.Series:
     """
     EMA with SMA seed — matches ProRealTime and most professional platforms.
-    First EMA value = SMA of the first `period` bars; exponential from there.
+    First EMA value = SMA of the first `period` non-NaN bars; exponential from there.
+    Skips leading NaN values so MACD signal (fed a MACD series with 26 leading NaN)
+    is seeded correctly from the first valid MACD bar rather than NaN-propagating.
     pandas ewm(adjust=False) seeds from bar-1 instead, causing divergence.
     """
     k = 2.0 / (period + 1)
     vals = series.to_numpy(dtype=float)
     out = [float('nan')] * len(vals)
-    if len(vals) < period:
+    # Skip leading NaN — find first valid index
+    start = 0
+    while start < len(vals) and vals[start] != vals[start]:  # NaN != NaN is True
+        start += 1
+    if start + period > len(vals):
         return pd.Series(out, index=series.index)
-    out[period - 1] = float(sum(vals[:period]) / period)   # SMA seed
-    for i in range(period, len(vals)):
+    seed_idx = start + period - 1
+    out[seed_idx] = float(sum(vals[start:start + period]) / period)   # SMA seed
+    for i in range(seed_idx + 1, len(vals)):
         out[i] = vals[i] * k + out[i - 1] * (1 - k)
     return pd.Series(out, index=series.index)
 
@@ -553,7 +560,7 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
     exp1 = _sma_seeded_ema(df['close'], 12)
     exp2 = _sma_seeded_ema(df['close'], 26)
     macd = exp1 - exp2
-    sig  = _sma_seeded_ema(macd.ffill(), 9)
+    sig  = _sma_seeded_ema(macd, 9)
     rsi  = _wilder_rsi(df['close'], RSI_PERIOD)
     out = df.copy()
     out['macd']        = macd
