@@ -821,7 +821,10 @@ async def handle_bar(bar: dict):
             pending_sell_orders = []
             for order in (orders or []):
                 try:
-                    order_side = getattr(order, "side", "").lower()
+                    order_side = str(getattr(order, "side", "")).lower()
+                    # Normalise enum format e.g. "orderside.sell" -> "sell"
+                    if "." in order_side:
+                        order_side = order_side.split(".")[-1]
                     if order_side == "sell":
                         pending_sell_orders.append(order)
                 except Exception:
