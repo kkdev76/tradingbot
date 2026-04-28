@@ -553,7 +553,7 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
     exp1 = _sma_seeded_ema(df['close'], 12)
     exp2 = _sma_seeded_ema(df['close'], 26)
     macd = exp1 - exp2
-    sig  = _sma_seeded_ema(macd.fillna(method='ffill'), 9)
+    sig  = _sma_seeded_ema(macd.ffill(), 9)
     rsi  = _wilder_rsi(df['close'], RSI_PERIOD)
     out = df.copy()
     out['macd']        = macd
