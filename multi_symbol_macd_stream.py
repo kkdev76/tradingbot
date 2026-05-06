@@ -602,29 +602,25 @@ def bootstrap_history(sym: str):
         # bars are newest-first; reverse to oldest-first for chronological EMA
         bars = list(reversed(bars))
 
-        ET = ZoneInfo("America/New_York")
-        regular_open  = datetime_time(9, 30)
-        regular_close = datetime_time(16, 0)
-
+        # Include ALL bars — pre-market, regular session, after-hours.
+        # EMA is a continuum: skipping any bars breaks EMA-12/EMA-26 continuity
+        # and causes MACD to diverge from TradingView / ProRealTime.
         rows = []
         for b in bars:
             ts_utc = pd.to_datetime(b['t']).replace(tzinfo=timezone.utc)
-            ts_et  = ts_utc.astimezone(ET)
-            # Keep only regular session bars — matches TradingView / ProRealTime defaults
-            if regular_open <= ts_et.time() < regular_close:
-                rows.append({
-                    'timestamp': ts_utc,
-                    'open': b['o'], 'high': b['h'], 'low': b['l'],
-                    'close': b['c'], 'volume': b['v'],
-                })
+            rows.append({
+                'timestamp': ts_utc,
+                'open': b['o'], 'high': b['h'], 'low': b['l'],
+                'close': b['c'], 'volume': b['v'],
+            })
 
         if not rows:
-            log(f"⚠️ {sym}: No regular-hours bars in response — will warm up from live bars.")
+            log(f"⚠️ {sym}: No bars in response — will warm up from live bars.")
             return
 
         df = pd.DataFrame(rows)
         dfs[sym] = compute_macd(df)
-        log(f"✅ {sym}: bootstrapped {len(df)} regular-session bars (back {BOOTSTRAP_MAX_DAYS_BACK}d, max {BOOTSTRAP_BAR_COUNT}).")
+        log(f"✅ {sym}: bootstrapped {len(df)} bars incl. pre/after-market (back {BOOTSTRAP_MAX_DAYS_BACK}d, max {BOOTSTRAP_BAR_COUNT}).")
 
     except requests.exceptions.Timeout:
         log(f"⚠️ {sym}: Bootstrap timed out — will warm up from live bars (~35 min).")
@@ -721,13 +717,12 @@ async def handle_bar(bar: dict):
 
     ts = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
 
-    # Drop pre-market / after-hours bars — keeps live indicators aligned with
-    # TradingView and ProRealTime which compute on regular session only.
+    # Determine session — EMA runs on ALL bars (pre-market + after-hours) for
+    # continuity matching TradingView.  Trade order placement is still gated to
+    # regular session only (checked below after indicators are computed).
     _ET = ZoneInfo("America/New_York")
     ts_et = ts.astimezone(_ET).time()
-    if not (datetime_time(9, 30) <= ts_et < datetime_time(16, 0)):
-        log(f"⏭️  {sym}: skipping extended-hours bar at {ts_et}")
-        return
+    is_regular_session = datetime_time(9, 30) <= ts_et < datetime_time(16, 0)
 
     # Append bar and compute MACD
     row = {'timestamp': ts, 'open': bar['o'], 'high': bar['h'], 'low': bar['l'], 'close': bar['c'], 'volume': bar['v']}
@@ -755,6 +750,12 @@ async def handle_bar(bar: dict):
 
     log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}, RSI={rsi_val:.2f}")
     # log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
+
+    # Extended-hours bar: EMA/MACD/RSI buffers updated above for continuity.
+    # No position queries or order placement outside regular session.
+    if not is_regular_session:
+        log(f"⏭️  {sym}: extended-hours bar — EMA updated, no trades at {ts_et}")
+        return
 
     # Position check
     pos_obj = None
