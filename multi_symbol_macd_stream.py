@@ -747,9 +747,11 @@ async def handle_bar(bar: dict):
     rsi_increasing = is_rsi_monotonically_increasing(sym)
     rsi_in_zone = RSI_BUY_MIN <= rsi_val <= RSI_BUY_MAX
 
-    # Log indicators to per-symbol CSV
+    # Log indicators to per-symbol CSV — skip during warmup (NaN values not useful)
     close_price = float(df.iloc[-1]['close'])
-    _log_indicators(sym, ts, close_price, macd, sig, rsi_val)
+    indicators_ready = not (math.isnan(macd) or math.isnan(sig) or math.isnan(rsi_val))
+    if indicators_ready:
+        _log_indicators(sym, ts, close_price, macd, sig, rsi_val)
 
     log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}, RSI={rsi_val:.2f}")
     # log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
