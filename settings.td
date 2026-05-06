@@ -48,11 +48,13 @@ HISTORICAL_FEED=sip
 # Use raw adjustments for intraday indicator consistency (raw, split, dividend, all)
 HISTORICAL_ADJUSTMENT=raw
 # Number of most recent 1-min bars to bootstrap MACD.
-# Must be large enough to skip pre-market + after-hours bars to reach yesterday's regular session:
-#   pre-market today (4AM-9:30AM ET) = ~330 bars
-#   after-hours yesterday (4PM-8PM ET) = ~240 bars
-#   total extended hours to skip = ~570 bars → use 1000 for safe margin
-BOOTSTRAP_BAR_COUNT=1000
+# All bars (pre-market, regular, after-hours) are included — EMA is a continuum.
+# EMA-26 seed influence decays as (1-k)^N where k=2/27≈0.074:
+#   N=65  → ~0.8% seed remaining
+#   N=100 → ~0.06% seed remaining (effectively zero)
+# 200 bars = ~3.3 hrs, fully within today's pre-market at a typical 9AM ET startup.
+# 50-bar safety margin above the ~150 needed for complete convergence.
+BOOTSTRAP_BAR_COUNT=200
 # Maximum days to look back when fetching historical bars in one request
 BOOTSTRAP_MAX_DAYS_BACK=2
 # Minimum bars required before enabling trading decisions (26+9=35 with SMA-seeded EMA)
