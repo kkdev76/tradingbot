@@ -102,9 +102,9 @@ trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
 
 # State
 dfs = {sym: pd.DataFrame(columns=['timestamp','open','high','low','close','volume']) for sym in SYMBOLS}
-# 3-bar rolling MACD buffer tracked from the moment a position is opened
+# 5-bar rolling MACD buffer tracked from the moment a position is opened
 _nan = float('nan')
-position_macd_buffer = {sym: [_nan, _nan, _nan] for sym in SYMBOLS}
+position_macd_buffer = {sym: [_nan, _nan, _nan, _nan, _nan] for sym in SYMBOLS}
 # Parse per-symbol budgets from DOLLAR_BUDGETS (e.g. AMD:10000,TSLA:5000)
 # Falls back to DEFAULT_DOLLAR if a symbol is not listed
 _default_dollar = float(os.getenv('DEFAULT_DOLLAR', '0'))
@@ -186,42 +186,54 @@ def is_rsi_monotonically_increasing(sym: str) -> bool:
 
 def update_position_macd_buffer(sym: str, macd: float):
     """
-    Update the 3-bar rolling MACD buffer for a held position.
+    Update the 5-bar rolling MACD buffer for a held position.
     Fills slots left to right until full, then shifts oldest out.
     """
     buf = position_macd_buffer[sym]
     nan = float('nan')
-    if buf[0] != buf[0]:        # buf[0] is NaN — buffer empty
-        position_macd_buffer[sym] = [macd, nan, nan]
-    elif buf[1] != buf[1]:      # buf[1] is NaN — one value stored
-        position_macd_buffer[sym] = [buf[0], macd, nan]
-    elif buf[2] != buf[2]:      # buf[2] is NaN — two values stored
-        position_macd_buffer[sym] = [buf[0], buf[1], macd]
+    if buf[0] != buf[0]:        # buffer empty
+        position_macd_buffer[sym] = [macd, nan, nan, nan, nan]
+    elif buf[1] != buf[1]:
+        position_macd_buffer[sym] = [buf[0], macd, nan, nan, nan]
+    elif buf[2] != buf[2]:
+        position_macd_buffer[sym] = [buf[0], buf[1], macd, nan, nan]
+    elif buf[3] != buf[3]:
+        position_macd_buffer[sym] = [buf[0], buf[1], buf[2], macd, nan]
+    elif buf[4] != buf[4]:
+        position_macd_buffer[sym] = [buf[0], buf[1], buf[2], buf[3], macd]
     else:                        # Buffer full — shift left, append new
-        position_macd_buffer[sym] = [buf[1], buf[2], macd]
+        position_macd_buffer[sym] = [buf[1], buf[2], buf[3], buf[4], macd]
 
 def reset_position_macd_buffer(sym: str):
     """Reset position MACD buffer when a position is closed."""
     nan = float('nan')
-    position_macd_buffer[sym] = [nan, nan, nan]
+    position_macd_buffer[sym] = [nan, nan, nan, nan, nan]
 
 def check_macd_exit(sym: str) -> tuple:
     """
     Returns (should_sell, reason).
-    Requires 3 bars of data. Holds if monotonically increasing.
-    Sells if flattening (current ≈ previous) or declining.
+    Requires 5 bars of data. Holds if all 5 bars monotonically increasing.
+    Sells only when the last TWO consecutive transitions are both non-rising
+    (declining or flattening within MACD_FLATTEN_THRESHOLD). A single-bar
+    dip is ignored — two in a row confirms the momentum has stalled.
     """
     buf = position_macd_buffer[sym]
     if any(v != v for v in buf):   # NaN present — not enough data yet
         return False, ""
-    b0, b1, b2 = buf
-    if b0 < b1 < b2:               # Monotonically increasing — hold
+    b0, b1, b2, b3, b4 = buf
+    if b0 < b1 < b2 < b3 < b4:    # All 5 strictly increasing — hold
         return False, ""
-    diff = b2 - b1
-    if abs(diff) < MACD_FLATTEN_THRESHOLD:
-        return True, f"flattening (Δ={diff:.4f}, threshold=±{MACD_FLATTEN_THRESHOLD})"
-    else:
-        return True, f"declining ({b1:.4f} → {b2:.4f})"
+    d1 = b3 - b2   # second-to-last transition
+    d2 = b4 - b3   # last transition
+    # A transition is "not rising" if it fails to clear the flatten threshold
+    d1_stalled = d1 < MACD_FLATTEN_THRESHOLD
+    d2_stalled = d2 < MACD_FLATTEN_THRESHOLD
+    if d1_stalled and d2_stalled:
+        if d2 >= 0:
+            return True, f"flattening 2 bars (Δ={d1:.4f}, Δ={d2:.4f})"
+        else:
+            return True, f"declining 2 bars ({b2:.4f}→{b3:.4f}→{b4:.4f})"
+    return False, ""
 
 def _get_macd_neutral_threshold(sym: str) -> float:
     """
@@ -943,9 +955,10 @@ async def handle_bar(bar: dict):
             gap_ok = False
             gap_desc = f"MACD={macd:.4f}<=0"
         elif macd < min_val:
-            abs_gap = macd - sig
-            gap_ok  = abs_gap > abs_gap_min
-            gap_desc = f"crossover regime: abs_gap={abs_gap:.4f} vs min={abs_gap_min}"
+            # Hard buy floor: MACD_MIN_VALUE is the minimum to enter, not just
+            # a regime boundary. Below it the stock is in a consolidation zone.
+            gap_ok = False
+            gap_desc = f"MACD={macd:.4f} below floor {min_val} (consolidation zone)"
         else:
             gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
             gap_ok  = gap_pct > MACD_GAP_PERCENT
@@ -977,8 +990,8 @@ async def handle_bar(bar: dict):
                     try:
                         place_buy(sym, limit, remaining_budget[sym])
                         last_trade_time[sym] = now
-                        position_macd_buffer[sym] = [macd, float('nan'), float('nan')]
-                        log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan]")
+                        position_macd_buffer[sym] = [macd, float('nan'), float('nan'), float('nan'), float('nan')]
+                        log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan, nan, nan]")
                         log(f"Updated last_trade_time for {sym} to {last_trade_time[sym].astimezone(ZoneInfo('America/Los_Angeles')).strftime('%H:%M:%S PT')}")
                     except Exception as e:
                         log(f"❌ BUY order failed for {sym}: {e}")
