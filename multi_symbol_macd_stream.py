@@ -960,9 +960,14 @@ async def handle_bar(bar: dict):
             gap_ok = False
             gap_desc = f"MACD={macd:.4f} below floor {min_val} (consolidation zone)"
         else:
-            gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
-            gap_ok  = gap_pct > MACD_GAP_PERCENT
-            gap_desc = f"trending regime: gap={gap_pct:.1f}% vs min={MACD_GAP_PERCENT}%"
+            prev_macd = df.iloc[-2]['macd'] if len(df) >= 2 else float('nan')
+            if math.isnan(prev_macd) or prev_macd < min_val:
+                gap_ok = False
+                gap_desc = f"MACD={macd:.4f} first bar above floor {min_val} (prev={prev_macd:.4f}) — waiting for confirmation"
+            else:
+                gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
+                gap_ok  = gap_pct > MACD_GAP_PERCENT
+                gap_desc = f"trending regime: gap={gap_pct:.1f}% vs min={MACD_GAP_PERCENT}%"
 
         if gap_ok and sig_rising:
             now = datetime.now(timezone.utc)
