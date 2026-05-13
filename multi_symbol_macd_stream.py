@@ -54,6 +54,7 @@ SYMBOLS = [s.strip().upper() for s in os.getenv('STOCK_LIST', 'AAPL').split(',')
 MACD_GAP_PERCENT = float(os.getenv('MACD_GAP_PERCENT', '40'))
 MACD_MIN_VALUE   = float(os.getenv('MACD_MIN_VALUE', '0.05'))
 MACD_ABS_GAP_MIN = float(os.getenv('MACD_ABS_GAP_MIN', '0.03'))
+SIGNAL_MIN_VALUE = float(os.getenv('SIGNAL_MIN_VALUE', '0.08'))
 MACD_FLATTEN_THRESHOLD = float(os.getenv('MACD_FLATTEN_THRESHOLD', '0.01'))
 RSI_PERIOD = int(os.getenv('RSI_PERIOD', '9'))
 RSI_BUY_MIN = float(os.getenv('RSI_BUY_MIN', '50'))
@@ -262,6 +263,7 @@ def _get_macd_neutral_threshold(sym: str) -> float:
 _profit_take_cache   = {}
 _macd_min_cache      = {}
 _macd_abs_gap_cache  = {}
+_signal_min_cache    = {}
 
 def _get_macd_min_value(sym: str) -> float:
     """Per-symbol MACD_MIN_VALUE. Key: MACD_MIN_VALUE_<SYMBOL>. Falls back to MACD_MIN_VALUE."""
@@ -277,6 +279,22 @@ def _get_macd_min_value(sym: str) -> float:
             log(f"⚠️ Invalid MACD_MIN_VALUE_{sym}: '{raw}'. Falling back to {MACD_MIN_VALUE}")
             val = MACD_MIN_VALUE
     _macd_min_cache[sym] = val
+    return val
+
+def _get_signal_min_value(sym: str) -> float:
+    """Per-symbol minimum abs(Signal) required before a buy. Key: SIGNAL_MIN_VALUE_<SYMBOL>."""
+    if sym in _signal_min_cache:
+        return _signal_min_cache[sym]
+    raw = os.getenv(f"SIGNAL_MIN_VALUE_{sym.upper()}")
+    if raw is None:
+        val = SIGNAL_MIN_VALUE
+    else:
+        try:
+            val = abs(float(raw))
+        except Exception:
+            log(f"⚠️ Invalid SIGNAL_MIN_VALUE_{sym}: '{raw}'. Falling back to {SIGNAL_MIN_VALUE}")
+            val = SIGNAL_MIN_VALUE
+    _signal_min_cache[sym] = val
     return val
 
 def _get_macd_abs_gap_min(sym: str) -> float:
@@ -969,7 +987,10 @@ async def handle_bar(bar: dict):
                 gap_ok  = gap_pct > MACD_GAP_PERCENT
                 gap_desc = f"trending regime: gap={gap_pct:.1f}% vs min={MACD_GAP_PERCENT}%"
 
-        if gap_ok and sig_rising:
+        sig_min = _get_signal_min_value(sym)
+        sig_established = abs(sig) >= sig_min
+
+        if gap_ok and sig_rising and sig_established:
             now = datetime.now(timezone.utc)
             elapsed = (now - last_trade_time[sym]).total_seconds() / 60
             if elapsed < TRADE_COOLDOWN_MINUTES:
@@ -991,7 +1012,7 @@ async def handle_bar(bar: dict):
                     log(f"⚠️ {sym}: Skipping BUY — no valid quote yet (bid={bid})")
                 else:
                     limit = round(bid + 0.01, 2)
-                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
+                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
                     try:
                         place_buy(sym, limit, remaining_budget[sym])
                         last_trade_time[sym] = now
@@ -1004,6 +1025,8 @@ async def handle_bar(bar: dict):
             pass  # gap condition not met for current regime
         elif not sig_rising:
             pass  # signal not rising — trend not yet confirmed
+        elif not sig_established:
+            log(f"💀 {sym}: Skipping BUY — abs(Signal)={abs(sig):.4f} below floor {sig_min} (no trend context)")
         # log(f"🧭 Path exit: BUY evaluation complete for {sym}")
         pass
     else:

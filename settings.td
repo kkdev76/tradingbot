@@ -7,9 +7,24 @@ DEFAULT_DOLLAR=5000
 # Any symbol listed here will use its own budget; others fall back to DEFAULT_DOLLAR
 DOLLAR_BUDGETS=NVDA:7000,AAPL:7000,META:7000,MSFT:5000,JPM:5000   # per‑symbol overrides
 
-# MACD buy conditions
-MACD_MIN_THRESHOLD=0.2
+# MACD buy conditions — two-regime momentum gate:
+#   Crossover regime (0 < MACD < MACD_MIN_VALUE): use absolute gap  (macd - signal) > MACD_ABS_GAP_MIN
+#   Trending regime  (MACD >= MACD_MIN_VALUE):     use percentage gap (macd - signal) / signal > MACD_GAP_PERCENT
+# Global defaults (used if no per-symbol override is set)
+MACD_MIN_VALUE=0.05
+MACD_ABS_GAP_MIN=0.03
 MACD_GAP_PERCENT=40
+# Per-symbol overrides — MACD magnitude scales with price so each symbol needs its own floor
+MACD_MIN_VALUE_NVDA=0.15
+MACD_MIN_VALUE_AAPL=0.08
+MACD_MIN_VALUE_META=0.20
+MACD_MIN_VALUE_MSFT=0.10
+MACD_MIN_VALUE_JPM=0.07
+MACD_ABS_GAP_MIN_NVDA=0.08
+MACD_ABS_GAP_MIN_AAPL=0.05
+MACD_ABS_GAP_MIN_META=0.12
+MACD_ABS_GAP_MIN_MSFT=0.06
+MACD_ABS_GAP_MIN_JPM=0.04
 
 # MACD sell condition: how close two consecutive MACD values need to be to count as "flattening"
 MACD_FLATTEN_THRESHOLD=0.01
@@ -22,6 +37,19 @@ RSI_BUY_MAX=65
 # Cooldown in minutes between trades on same symbol
 MIN_TRADE_COOLDOWN_MINUTES=10
 
+# Signal line floor: abs(Signal) must exceed this before a buy is allowed.
+# When Signal is near zero the MACD has no directional history — entering is chop, not trend.
+# A large negative Signal (recovery from sell-off) still passes because abs() is used,
+# so genuine reversals are not blocked.
+# Formula for a new symbol: max(0.08, min(price * 0.00034, 0.10))
+# Reference: AAPL $294 → 0.10, NVDA $217 → 0.08 (floored), META $600 → 0.10 (capped)
+SIGNAL_MIN_VALUE=0.08
+SIGNAL_MIN_VALUE_NVDA=0.10
+SIGNAL_MIN_VALUE_AAPL=0.10
+SIGNAL_MIN_VALUE_META=0.10
+SIGNAL_MIN_VALUE_MSFT=0.10
+SIGNAL_MIN_VALUE_JPM=0.10
+
 NEGATIVE_PL_THRESHOLD=-100.0
 STOP_LOSS_PERCENT=0.15
 CRON_SHUTDOWN=12:55
@@ -32,12 +60,18 @@ MACD_NEUTRAL_DEFAULT=0.20
 HISTORICAL_FEED=sip
 # Use raw adjustments for intraday indicator consistency (raw, split, dividend, all)
 HISTORICAL_ADJUSTMENT=raw
-# Number of most recent 1-min bars to bootstrap MACD
-BOOTSTRAP_BAR_COUNT=120
+# Number of most recent 1-min bars to bootstrap MACD.
+# All bars (pre-market, regular, after-hours) are included — EMA is a continuum.
+# EMA-26 seed influence decays as (1-k)^N where k=2/27≈0.074:
+#   N=65  → ~0.8% seed remaining
+#   N=100 → ~0.06% seed remaining (effectively zero)
+# 200 bars = ~3.3 hrs, fully within today's pre-market at a typical 9AM ET startup.
+# 50-bar safety margin above the ~150 needed for complete convergence.
+BOOTSTRAP_BAR_COUNT=200
 # Maximum days to look back when fetching historical bars in one request
-BOOTSTRAP_MAX_DAYS_BACK=5
-# Minimum bars required before enabling trading decisions (warm-up)
-MACD_WARMUP_BARS=78
+BOOTSTRAP_MAX_DAYS_BACK=2
+# Minimum bars required before enabling trading decisions (26+9=35 with SMA-seeded EMA)
+MACD_WARMUP_BARS=35
 
 # Take-profit: sell when unrealized P&L % reaches this threshold (per-symbol)
 PROFIT_TAKE_NVDA=0.4
