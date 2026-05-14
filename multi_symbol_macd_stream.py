@@ -22,7 +22,7 @@ from alpaca.trading.requests import ClosePositionRequest
 from zoneinfo import ZoneInfo
 
 # Logging to file in Pacific Time (handles PST/PDT automatically)
-log_filename = 'trading_log.txt'
+log_filename = 'trading_log_' + datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%m%d%y') + '.txt'
 
 class PTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -470,6 +470,17 @@ def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = "")
                 except Exception:
                     pass
         finally:
+            # Move today's log file into indicator_logs/ so the dashboard can sync it
+            try:
+                import shutil
+                src = log_filename
+                dst_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), _INDICATOR_LOG_DIR)
+                os.makedirs(dst_dir, exist_ok=True)
+                dst = os.path.join(dst_dir, os.path.basename(src))
+                if os.path.exists(src):
+                    shutil.move(src, dst)
+            except Exception:
+                pass
             sys.exit(2)
 
 def risk_guard_check(client: TradingClient):
