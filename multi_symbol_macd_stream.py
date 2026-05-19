@@ -1022,10 +1022,9 @@ async def handle_bar(bar: dict):
                 if bid <= 0:
                     log(f"⚠️ {sym}: Skipping BUY — no valid quote yet (bid={bid})")
                 else:
-                    limit = round(bid + 0.01, 2)
-                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
+                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ market (bid={bid:.2f})🟢🟢🟢")
                     try:
-                        place_buy(sym, limit, remaining_budget[sym])
+                        place_buy(sym, bid, remaining_budget[sym])
                         last_trade_time[sym] = now
                         position_macd_buffer[sym] = [macd, float('nan'), float('nan'), float('nan'), float('nan')]
                         log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan, nan, nan]")
