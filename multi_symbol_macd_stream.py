@@ -1089,9 +1089,15 @@ async def main():
                     # log(f"💬 QUOTE {sym_q}: bid={bp:.2f}, ask={ap:.2f}")
     
 if __name__ == '__main__':
-    try:
-        asyncio.run(main()) # run the main loop
-    except Exception as e:
-        log(f"💥 Main loop crashed: {e}")
-        sys.exit(1)
+    # Auto-reconnect loop: restarts main() on any WebSocket/network crash.
+    # SystemExit (raised by halt_trading → sys.exit(2)) is a BaseException, NOT
+    # a subclass of Exception, so it propagates out of the loop cleanly on
+    # scheduled shutdown without triggering a reconnect.
+    while True:
+        try:
+            asyncio.run(main())
+        except Exception as e:
+            log(f"💥 Main loop crashed: {e}")
+            log(f"🔄 Reconnecting in 10s...")
+            time.sleep(10)
     
