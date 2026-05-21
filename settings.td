@@ -14,8 +14,12 @@ MACD_MIN_VALUE=0.05
 MACD_ABS_GAP_MIN=0.03
 MACD_GAP_PERCENT=40
 # Per-symbol gap% overrides — only set where data shows the global 40% is too loose
-# AMD: backsim shows gap<90% entries all lost; gap>=90% entries all won (3 days May 18-20)
+# AMD:  gap<90% entries all lost; gap>=90% entries all won  (3-day backsim May 18-20)
+# AVGO: gap>=70% keeps the 1 strong winner (+$24), filters 4 small losers
+# CAT:  gap>=70% keeps the 2 high-gap winners, filters 3 low-gap losers
 MACD_GAP_PERCENT_AMD=90
+MACD_GAP_PERCENT_AVGO=70
+MACD_GAP_PERCENT_CAT=70
 # Per-symbol overrides — formula: macd_min = price * 0.0005, abs_gap = macd_min * 0.6
 # Prices verified via Alpaca live quotes 2026-05-20:
 # AMD~$440, GOOGL~$388, AMZN~$264, GS~$983, AVGO~$417, CAT~$869, NVDA~$221, META~$603, MU~$726
