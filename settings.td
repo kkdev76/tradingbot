@@ -13,6 +13,9 @@ DOLLAR_BUDGETS=AMD:5000,GOOGL:5000,AMZN:5000,GS:5000,AVGO:5000,CAT:5000,NVDA:500
 MACD_MIN_VALUE=0.05
 MACD_ABS_GAP_MIN=0.03
 MACD_GAP_PERCENT=40
+# Per-symbol gap% overrides — only set where data shows the global 40% is too loose
+# AMD: backsim shows gap<90% entries all lost; gap>=90% entries all won (3 days May 18-20)
+MACD_GAP_PERCENT_AMD=90
 # Per-symbol overrides — formula: macd_min = price * 0.0005, abs_gap = macd_min * 0.6
 # Prices verified via Alpaca live quotes 2026-05-20:
 # AMD~$440, GOOGL~$388, AMZN~$264, GS~$983, AVGO~$417, CAT~$869, NVDA~$221, META~$603, MU~$726
