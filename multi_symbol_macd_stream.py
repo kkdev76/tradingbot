@@ -313,24 +313,6 @@ def _get_macd_abs_gap_min(sym: str) -> float:
     _macd_abs_gap_cache[sym] = val
     return val
 
-_gap_pct_cache = {}
-
-def _get_macd_gap_percent(sym: str) -> float:
-    """Per-symbol MACD_GAP_PERCENT. Key: MACD_GAP_PERCENT_<SYMBOL>. Falls back to MACD_GAP_PERCENT."""
-    if sym in _gap_pct_cache:
-        return _gap_pct_cache[sym]
-    raw = os.getenv(f"MACD_GAP_PERCENT_{sym.upper()}")
-    if raw is None:
-        val = MACD_GAP_PERCENT
-    else:
-        try:
-            val = float(raw)
-        except Exception:
-            log(f"⚠️ Invalid MACD_GAP_PERCENT_{sym}: '{raw}'. Falling back to {MACD_GAP_PERCENT}")
-            val = MACD_GAP_PERCENT
-    _gap_pct_cache[sym] = val
-    return val
-
 def _get_profit_take_percent(sym: str) -> float:
     """
     Returns the take-profit threshold (% gain) for a given symbol,
@@ -1012,10 +994,9 @@ async def handle_bar(bar: dict):
                 gap_ok = False
                 gap_desc = f"MACD={macd:.4f} first bar above floor {min_val} (prev={prev_macd:.4f}) — waiting for confirmation"
             else:
-                gap_pct       = ((macd - sig) / abs(sig)) * 100 if sig else 0
-                gap_threshold = _get_macd_gap_percent(sym)
-                gap_ok        = gap_pct > gap_threshold
-                gap_desc      = f"trending regime: gap={gap_pct:.1f}% vs min={gap_threshold}%"
+                gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
+                gap_ok  = gap_pct > MACD_GAP_PERCENT
+                gap_desc = f"trending regime: gap={gap_pct:.1f}% vs min={MACD_GAP_PERCENT}%"
 
         sig_min = _get_signal_min_value(sym)
         sig_established = abs(sig) >= sig_min
@@ -1041,9 +1022,10 @@ async def handle_bar(bar: dict):
                 if bid <= 0:
                     log(f"⚠️ {sym}: Skipping BUY — no valid quote yet (bid={bid})")
                 else:
-                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ market (bid={bid:.2f})🟢🟢🟢")
+                    limit = round(bid + 0.01, 2)
+                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
                     try:
-                        place_buy(sym, bid, remaining_budget[sym])
+                        place_buy(sym, limit, remaining_budget[sym])
                         last_trade_time[sym] = now
                         position_macd_buffer[sym] = [macd, float('nan'), float('nan'), float('nan'), float('nan')]
                         log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan, nan, nan]")
@@ -1108,15 +1090,9 @@ async def main():
                     # log(f"💬 QUOTE {sym_q}: bid={bp:.2f}, ask={ap:.2f}")
     
 if __name__ == '__main__':
-    # Auto-reconnect loop: restarts main() on any WebSocket/network crash.
-    # SystemExit (raised by halt_trading → sys.exit(2)) is a BaseException, NOT
-    # a subclass of Exception, so it propagates out of the loop cleanly on
-    # scheduled shutdown without triggering a reconnect.
-    while True:
-        try:
-            asyncio.run(main())
-        except Exception as e:
-            log(f"💥 Main loop crashed: {e}")
-            log(f"🔄 Reconnecting in 10s...")
-            time.sleep(10)
+    try:
+        asyncio.run(main()) # run the main loop
+    except Exception as e:
+        log(f"💥 Main loop crashed: {e}")
+        sys.exit(1)
     

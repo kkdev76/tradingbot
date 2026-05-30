@@ -1,8 +1,7 @@
 import os, time
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest  # LimitOrderRequest retained below as reference
-# from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 from dotenv import load_dotenv
 
 load_dotenv("keys.env")
@@ -27,7 +26,7 @@ def cancel_symbol_orders(symbol: str):
                     raise
 
 def place_sell(symbol: str, ask_price: float, qty: int = None) -> int:
-    """Sell given qty shares (or all if qty=None) as a MARKET order. Returns filled qty."""
+    """Sell given qty shares (or all if qty=None) at LIMIT price (ask-0.05). Returns filled qty."""
     # Determine qty if not provided
     if qty is None:
         try:
@@ -37,27 +36,20 @@ def place_sell(symbol: str, ask_price: float, qty: int = None) -> int:
             qty = 0
     if qty < 1:
         return 0
+    limit_price = round(ask_price - 0.05, 2)
     cancel_symbol_orders(symbol)
-    order_req = MarketOrderRequest(
+    order_req = LimitOrderRequest(
         symbol=symbol,
         qty=qty,
         side=OrderSide.SELL,
         time_in_force=TimeInForce.DAY,
+        limit_price=limit_price,
     )
-    # # Old limit order approach — retained for reference
-    # limit_price = round(ask_price - 0.05, 2)
-    # order_req = LimitOrderRequest(
-    #     symbol=symbol,
-    #     qty=qty,
-    #     side=OrderSide.SELL,
-    #     time_in_force=TimeInForce.DAY,
-    #     limit_price=limit_price,
-    # )
     order = trading_client.submit_order(order_req)
-    # Market orders fill in milliseconds — short sleep is sufficient
-    time.sleep(1)
-    # Poll for fill confirmation
-    for _ in range(3):
+    # Wait 5 seconds before checking fill status
+    time.sleep(5)
+    # Poll for execution
+    for _ in range(5):
         orders = trading_client.get_orders()
         resp = next((o for o in orders if o.id == order.id), None)
         if resp:

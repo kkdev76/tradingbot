@@ -1,8 +1,7 @@
 import os, time
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest  # switched from LimitOrderRequest
-# from alpaca.trading.requests import LimitOrderRequest  # retained for reference
+from alpaca.trading.requests import LimitOrderRequest
 from dotenv import load_dotenv
 
 load_dotenv("keys.env")
@@ -27,32 +26,25 @@ def cancel_symbol_orders(symbol: str):
                     raise
 
 def place_buy(symbol: str, current_price: float, dollars: float) -> int:
-    """Buy as many shares as dollars/current_price as a MARKET order. Returns filled qty."""
+    """Buy as many shares as dollars/current_price at LIMIT price (bid+0.05). Returns filled qty."""
     qty = int(dollars // current_price)
     if qty < 1:
         raise ValueError("Budget too small for even 1 share.")
+    limit_price = round(current_price + 0.01, 2)
     cancel_symbol_orders(symbol)
-    order_req = MarketOrderRequest(
+    order_req = LimitOrderRequest(
         symbol=symbol,
         qty=qty,
         side=OrderSide.BUY,
         time_in_force=TimeInForce.DAY,
+        limit_price=limit_price,
     )
-    # # Old limit order approach — filled below ask too rarely, caused stale orders
-    # limit_price = round(current_price + 0.01, 2)
-    # order_req = LimitOrderRequest(
-    #     symbol=symbol,
-    #     qty=qty,
-    #     side=OrderSide.BUY,
-    #     time_in_force=TimeInForce.DAY,
-    #     limit_price=limit_price,
-    # )
     order = trading_client.submit_order(order_req)
-    # Market orders fill in milliseconds — short sleep is sufficient
-    time.sleep(1)
-    # Poll for fill confirmation
-    for _ in range(3):
-        orders = trading_client.get_orders()
+    # Wait 5 seconds before checking fill status
+    time.sleep(5)
+    # Poll for execution
+    for _ in range(5):
+        orders = trading_client.get_orders()  # poll open and filled
         resp = next((o for o in orders if o.id == order.id), None)
         if resp:
             filled = int(float(resp.filled_qty))
