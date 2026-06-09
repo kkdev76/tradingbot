@@ -1,10 +1,10 @@
-STOCK_LIST=AMD,GOOGL,AMZN,GS,AVGO,CAT,NVDA,META,MU
+STOCK_LIST=GOOGL,AVGO,AMZN,CAT,MSFT,AAPL
 
 # Default USD budget per symbol if not overridden below
 DEFAULT_DOLLAR=5000
 
 # Per-symbol USD budgets — all new symbols start at $5000
-DOLLAR_BUDGETS=AMD:5000,GOOGL:5000,AMZN:5000,GS:5000,AVGO:5000,CAT:5000,NVDA:5000,META:5000,MU:5000
+DOLLAR_BUDGETS=GOOGL:5000,AVGO:5000,AMZN:5000,CAT:5000,MSFT:5000,AAPL:5000
 
 # MACD buy conditions — two-regime momentum gate:
 #   Crossover regime (0 < MACD < MACD_MIN_VALUE): use absolute gap  (macd - signal) > MACD_ABS_GAP_MIN
@@ -14,33 +14,25 @@ MACD_MIN_VALUE=0.05
 MACD_ABS_GAP_MIN=0.03
 MACD_GAP_PERCENT=40
 # Per-symbol gap% overrides — only set where data shows the global 40% is too loose
-# AMD:  gap<90% entries all lost; gap>=90% entries all won  (3-day backsim May 18-20)
 # AVGO: gap>=70% keeps the 1 strong winner (+$24), filters 4 small losers
 # CAT:  gap>=70% keeps the 2 high-gap winners, filters 3 low-gap losers
-MACD_GAP_PERCENT_AMD=90
 MACD_GAP_PERCENT_AVGO=70
 MACD_GAP_PERCENT_CAT=70
-# Per-symbol overrides — formula: macd_min = price * 0.0005, abs_gap = macd_min * 0.6
-# Prices from 4pm ET close 2026-05-29:
-# AMD~$516, GOOGL~$381, AMZN~$271, GS~$1026, AVGO~$447, CAT~$876, NVDA~$212, META~$633, MU~$966
-MACD_MIN_VALUE_AMD=0.26
-MACD_MIN_VALUE_GOOGL=0.19
-MACD_MIN_VALUE_AMZN=0.14
-MACD_MIN_VALUE_GS=0.51
-MACD_MIN_VALUE_AVGO=0.22
-MACD_MIN_VALUE_CAT=0.44
-MACD_MIN_VALUE_NVDA=0.11
-MACD_MIN_VALUE_META=0.32
-MACD_MIN_VALUE_MU=0.48
-MACD_ABS_GAP_MIN_AMD=0.15
+# Per-symbol overrides — formula: macd_min = price * 0.0005, abs_gap = price * 0.0003
+# Prices from 4pm ET close 2026-06-08:
+# GOOGL~$364, AVGO~$397, AMZN~$245, CAT~$916, MSFT~$412, AAPL~$301
+MACD_MIN_VALUE_GOOGL=0.18
+MACD_MIN_VALUE_AVGO=0.20
+MACD_MIN_VALUE_AMZN=0.12
+MACD_MIN_VALUE_CAT=0.46
+MACD_MIN_VALUE_MSFT=0.21
+MACD_MIN_VALUE_AAPL=0.15
 MACD_ABS_GAP_MIN_GOOGL=0.11
-MACD_ABS_GAP_MIN_AMZN=0.08
-MACD_ABS_GAP_MIN_GS=0.31
-MACD_ABS_GAP_MIN_AVGO=0.13
-MACD_ABS_GAP_MIN_CAT=0.26
-MACD_ABS_GAP_MIN_NVDA=0.06
-MACD_ABS_GAP_MIN_META=0.19
-MACD_ABS_GAP_MIN_MU=0.29
+MACD_ABS_GAP_MIN_AVGO=0.12
+MACD_ABS_GAP_MIN_AMZN=0.07
+MACD_ABS_GAP_MIN_CAT=0.27
+MACD_ABS_GAP_MIN_MSFT=0.12
+MACD_ABS_GAP_MIN_AAPL=0.09
 
 # MACD sell condition: how close two consecutive MACD values need to be to count as "flattening"
 MACD_FLATTEN_THRESHOLD=0.01
@@ -58,18 +50,15 @@ MIN_TRADE_COOLDOWN_MINUTES=10
 # A large negative Signal (recovery from sell-off) still passes because abs() is used,
 # so genuine reversals are not blocked.
 # Formula for a new symbol: max(0.08, min(price * 0.00034, 0.10))
-# Reference: AAPL $294 → 0.10, NVDA $217 → 0.08 (floored), META $600 → 0.10 (capped)
+# Reference: MSFT $412 → 0.10 (capped), AAPL $301 → 0.10 (capped), AMZN $245 → 0.08
 SIGNAL_MIN_VALUE=0.08
-# formula: sig_min = min(max(price * 0.00034, 0.08), 0.15)
-SIGNAL_MIN_VALUE_AMD=0.10
+# formula: sig_min = clamp(price * 0.00034, 0.08, 0.10)
 SIGNAL_MIN_VALUE_GOOGL=0.10
-SIGNAL_MIN_VALUE_AMZN=0.09
-SIGNAL_MIN_VALUE_GS=0.10
 SIGNAL_MIN_VALUE_AVGO=0.10
+SIGNAL_MIN_VALUE_AMZN=0.08
 SIGNAL_MIN_VALUE_CAT=0.10
-SIGNAL_MIN_VALUE_NVDA=0.08
-SIGNAL_MIN_VALUE_META=0.10
-SIGNAL_MIN_VALUE_MU=0.10
+SIGNAL_MIN_VALUE_MSFT=0.10
+SIGNAL_MIN_VALUE_AAPL=0.10
 
 NEGATIVE_PL_THRESHOLD=-100.0
 STOP_LOSS_PERCENT=0.35
@@ -95,13 +84,10 @@ BOOTSTRAP_MAX_DAYS_BACK=2
 MACD_WARMUP_BARS=35
 
 # Take-profit: sell when unrealized P&L % reaches this threshold (per-symbol)
-PROFIT_TAKE_AMD=0.5
 PROFIT_TAKE_GOOGL=0.5
-PROFIT_TAKE_AMZN=0.5
-PROFIT_TAKE_GS=0.5
 PROFIT_TAKE_AVGO=0.5
+PROFIT_TAKE_AMZN=0.5
 PROFIT_TAKE_CAT=0.5
-PROFIT_TAKE_NVDA=0.5
-PROFIT_TAKE_META=0.5
-PROFIT_TAKE_MU=0.5
+PROFIT_TAKE_MSFT=0.5
+PROFIT_TAKE_AAPL=0.5
 PROFIT_TAKE_DEFAULT=0.5
