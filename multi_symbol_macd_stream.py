@@ -791,7 +791,7 @@ async def handle_bar(bar: dict):
     # Update RSI buffer and check trend
     update_rsi_buffer(sym, rsi_val)
     rsi_increasing = is_rsi_monotonically_increasing(sym)
-    rsi_in_zone = RSI_BUY_MIN <= rsi_val <= RSI_BUY_MAX
+    rsi_in_zone = rsi_val >= RSI_BUY_MIN
 
     # Log indicators to per-symbol CSV — skip during warmup (NaN values not useful)
     close_price = float(df.iloc[-1]['close'])
@@ -1025,7 +1025,7 @@ async def handle_bar(bar: dict):
             if not is_increasing:
                 log(f"💀 {sym}: Skipping BUY — MACD not monotonically increasing {[f'{v:.4f}' for v in macd_buffer[sym]]}")
             elif not rsi_in_zone:
-                log(f"💀 {sym}: Skipping BUY — RSI {rsi_val:.2f} not in zone [{RSI_BUY_MIN}-{RSI_BUY_MAX}]")
+                log(f"💀 {sym}: Skipping BUY — RSI {rsi_val:.2f} below floor {RSI_BUY_MIN}")
             elif not rsi_increasing:
                 log(f"💀 {sym}: Skipping BUY — RSI not stable ≥{RSI_BUY_MIN} {[f'{v:.2f}' for v in rsi_buffer[sym]]}")
             else:
@@ -1033,7 +1033,7 @@ async def handle_bar(bar: dict):
                 if bid <= 0:
                     log(f"⚠️ {sym}: Skipping BUY — no valid quote yet (bid={bid})")
                 else:
-                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ market (bid={bid:.2f})🟢🟢🟢")
+                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f}≥{RSI_BUY_MIN} → buying @ market (bid={bid:.2f})🟢🟢🟢")
                     try:
                         place_buy(sym, bid, remaining_budget[sym])
                         last_trade_time[sym] = now
