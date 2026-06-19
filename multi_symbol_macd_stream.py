@@ -55,7 +55,6 @@ MACD_GAP_PERCENT = float(os.getenv('MACD_GAP_PERCENT', '40'))
 MACD_MIN_VALUE   = float(os.getenv('MACD_MIN_VALUE', '0.05'))
 MACD_ABS_GAP_MIN = float(os.getenv('MACD_ABS_GAP_MIN', '0.03'))
 SIGNAL_MIN_VALUE = float(os.getenv('SIGNAL_MIN_VALUE', '0.08'))
-MACD_FLATTEN_THRESHOLD = float(os.getenv('MACD_FLATTEN_THRESHOLD', '0.01'))
 RSI_PERIOD = int(os.getenv('RSI_PERIOD', '9'))
 RSI_BUY_MIN = float(os.getenv('RSI_BUY_MIN', '50'))
 RSI_BUY_MAX = float(os.getenv('RSI_BUY_MAX', '65'))
@@ -214,9 +213,9 @@ def check_macd_exit(sym: str) -> tuple:
     """
     Returns (should_sell, reason).
     Requires 5 bars of data. Holds if all 5 bars monotonically increasing.
-    Sells only when the last TWO consecutive transitions are both non-rising
-    (declining or flattening within MACD_FLATTEN_THRESHOLD). A single-bar
-    dip is ignored — two in a row confirms the momentum has stalled.
+    Exits when b4 < b2 (current MACD below the window midpoint) AND d2 < 0
+    (last bar is actually declining). This avoids false exits on slow-rising
+    bars and catches both clean declines and spike-then-crash patterns.
     """
     buf = position_macd_buffer[sym]
     if any(v != v for v in buf):   # NaN present — not enough data yet
@@ -224,16 +223,9 @@ def check_macd_exit(sym: str) -> tuple:
     b0, b1, b2, b3, b4 = buf
     if b0 < b1 < b2 < b3 < b4:    # All 5 strictly increasing — hold
         return False, ""
-    d1 = b3 - b2   # second-to-last transition
     d2 = b4 - b3   # last transition
-    # A transition is "not rising" if it fails to clear the flatten threshold
-    d1_stalled = d1 < MACD_FLATTEN_THRESHOLD
-    d2_stalled = d2 < MACD_FLATTEN_THRESHOLD
-    if d1_stalled and d2_stalled:
-        if d2 >= 0:
-            return True, f"flattening 2 bars (Δ={d1:.4f}, Δ={d2:.4f})"
-        else:
-            return True, f"declining 2 bars ({b2:.4f}→{b3:.4f}→{b4:.4f})"
+    if b4 < b2 and d2 < 0:
+        return True, f"b4({b4:.4f}) < b2({b2:.4f}) and declining ({b3:.4f}→{b4:.4f})"
     return False, ""
 
 def _get_macd_neutral_threshold(sym: str) -> float:
@@ -311,6 +303,24 @@ def _get_macd_abs_gap_min(sym: str) -> float:
             log(f"⚠️ Invalid MACD_ABS_GAP_MIN_{sym}: '{raw}'. Falling back to {MACD_ABS_GAP_MIN}")
             val = MACD_ABS_GAP_MIN
     _macd_abs_gap_cache[sym] = val
+    return val
+
+_gap_pct_cache = {}
+
+def _get_macd_gap_percent(sym: str) -> float:
+    """Per-symbol MACD_GAP_PERCENT. Key: MACD_GAP_PERCENT_<SYMBOL>. Falls back to MACD_GAP_PERCENT."""
+    if sym in _gap_pct_cache:
+        return _gap_pct_cache[sym]
+    raw = os.getenv(f"MACD_GAP_PERCENT_{sym.upper()}")
+    if raw is None:
+        val = MACD_GAP_PERCENT
+    else:
+        try:
+            val = float(raw)
+        except Exception:
+            log(f"⚠️ Invalid MACD_GAP_PERCENT_{sym}: '{raw}'. Falling back to {MACD_GAP_PERCENT}")
+            val = MACD_GAP_PERCENT
+    _gap_pct_cache[sym] = val
     return val
 
 def _get_profit_take_percent(sym: str) -> float:
@@ -994,9 +1004,10 @@ async def handle_bar(bar: dict):
                 gap_ok = False
                 gap_desc = f"MACD={macd:.4f} first bar above floor {min_val} (prev={prev_macd:.4f}) — waiting for confirmation"
             else:
-                gap_pct = ((macd - sig) / abs(sig)) * 100 if sig else 0
-                gap_ok  = gap_pct > MACD_GAP_PERCENT
-                gap_desc = f"trending regime: gap={gap_pct:.1f}% vs min={MACD_GAP_PERCENT}%"
+                gap_pct       = ((macd - sig) / abs(sig)) * 100 if sig else 0
+                gap_threshold = _get_macd_gap_percent(sym)
+                gap_ok        = gap_pct > gap_threshold
+                gap_desc      = f"trending regime: gap={gap_pct:.1f}% vs min={gap_threshold}%"
 
         sig_min = _get_signal_min_value(sym)
         sig_established = abs(sig) >= sig_min
@@ -1022,10 +1033,9 @@ async def handle_bar(bar: dict):
                 if bid <= 0:
                     log(f"⚠️ {sym}: Skipping BUY — no valid quote yet (bid={bid})")
                 else:
-                    limit = round(bid + 0.01, 2)
-                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ {limit:.2f}🟢🟢🟢")
+                    log(f"🟢🟢🟢 BUY {sym}: MACD={macd:.4f}, {gap_desc}, Signal={sig:.4f}≥{sig_min} rising ({sig_prev:.4f}→{sig:.4f}), RSI={rsi_val:.2f} ∈ [{RSI_BUY_MIN}-{RSI_BUY_MAX}] → buying @ market (bid={bid:.2f})🟢🟢🟢")
                     try:
-                        place_buy(sym, limit, remaining_budget[sym])
+                        place_buy(sym, bid, remaining_budget[sym])
                         last_trade_time[sym] = now
                         position_macd_buffer[sym] = [macd, float('nan'), float('nan'), float('nan'), float('nan')]
                         log(f"📊 {sym} position MACD buffer initialized at buy: [{macd:.4f}, nan, nan, nan, nan]")
@@ -1090,9 +1100,15 @@ async def main():
                     # log(f"💬 QUOTE {sym_q}: bid={bp:.2f}, ask={ap:.2f}")
     
 if __name__ == '__main__':
-    try:
-        asyncio.run(main()) # run the main loop
-    except Exception as e:
-        log(f"💥 Main loop crashed: {e}")
-        sys.exit(1)
+    # Auto-reconnect loop: restarts main() on any WebSocket/network crash.
+    # SystemExit (raised by halt_trading → sys.exit(2)) is a BaseException, NOT
+    # a subclass of Exception, so it propagates out of the loop cleanly on
+    # scheduled shutdown without triggering a reconnect.
+    while True:
+        try:
+            asyncio.run(main())
+        except Exception as e:
+            log(f"💥 Main loop crashed: {e}")
+            log(f"🔄 Reconnecting in 10s...")
+            time.sleep(10)
     
