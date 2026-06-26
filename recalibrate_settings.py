@@ -3,14 +3,10 @@ Recalibrate per-symbol MACD/signal thresholds in settings.td by replaying
 all available indicator-log CSVs and finding the parameter combination that
 maximises cumulative P&L per symbol.
 
-Parameters swept per symbol
+Parameters swept per symbol:
   MACD_MIN_VALUE_<SYM>    floor; entry blocked when MACD < this
   MACD_GAP_PERCENT_<SYM>  % gap (MACD-Signal)/|Signal| required in trending regime
   SIGNAL_MIN_VALUE_<SYM>  minimum |Signal| before entry allowed
-
-MACD_ABS_GAP_MIN_<SYM> is kept in settings.td for reference but is currently
-not checked in the production entry logic — it is updated here using the
-price * 0.0003 formula so it tracks price regardless.
 
 Run after market close each trading day (e.g. 4:15 PM ET).
 """
@@ -324,17 +320,14 @@ def main():
                 best_combo = (macd_min, gap_pct, sig_min)
 
         macd_min, gap_pct, sig_min = best_combo
-        abs_gap = f"{price * 0.0003:.2f}"   # kept for reference, not live in entry logic
 
         best_params[sym] = {
-            "macd_min":  f"{macd_min:.2f}",
-            "gap_pct":   gap_pct,
-            "sig_min":   f"{sig_min:.2f}",
-            "abs_gap":   abs_gap,
-            "best_pl":   best_pl,
+            "macd_min": f"{macd_min:.2f}",
+            "gap_pct":  gap_pct,
+            "sig_min":  f"{sig_min:.2f}",
+            "best_pl":  best_pl,
         }
-        print(f"    best: MACD_MIN={macd_min:.2f}  GAP%={gap_pct}  SIG_MIN={sig_min:.2f}  "
-              f"ABS_GAP={abs_gap}(ref)  sim_PL=${best_pl:+.2f}")
+        print(f"    best: MACD_MIN={macd_min:.2f}  GAP%={gap_pct}  SIG_MIN={sig_min:.2f}  sim_PL=${best_pl:+.2f}")
 
     # ── write to settings.td ─────────────────────────────────────────────────
     print(f"\nUpdating {SETTINGS_FILE} ...")
@@ -351,7 +344,6 @@ def main():
 
     for sym, p in best_params.items():
         content = update_setting(content, f"MACD_MIN_VALUE_{sym}",   p["macd_min"])
-        content = update_setting(content, f"MACD_ABS_GAP_MIN_{sym}", p["abs_gap"])
         content = update_setting(content, f"MACD_GAP_PERCENT_{sym}", p["gap_pct"])
         content = update_setting(content, f"SIGNAL_MIN_VALUE_{sym}", p["sig_min"])
 
@@ -368,8 +360,6 @@ def main():
               f"{p['sig_min']:>8}  ${p['best_pl']:>+9.2f}")
 
     print(f"\nsettings.td updated.")
-    print(f"\nNote: MACD_ABS_GAP_MIN_<SYM> is written (price×0.0003) but is not currently")
-    print(f"      active in the entry logic — it tracks price as a reference only.")
 
 
 if __name__ == "__main__":
