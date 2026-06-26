@@ -1,114 +1,376 @@
 """
-Recalibrate price-derived thresholds in settings.td using latest closing prices.
+Recalibrate per-symbol MACD/signal thresholds in settings.td by replaying
+all available indicator-log CSVs and finding the parameter combination that
+maximises cumulative P&L per symbol.
 
-Run after market close each day (e.g. 4:15 PM ET).
+Parameters swept per symbol
+  MACD_MIN_VALUE_<SYM>    floor; entry blocked when MACD < this
+  MACD_GAP_PERCENT_<SYM>  % gap (MACD-Signal)/|Signal| required in trending regime
+  SIGNAL_MIN_VALUE_<SYM>  minimum |Signal| before entry allowed
 
-Updates per-symbol:
-  MACD_MIN_VALUE_<SYM>   = price * 0.0005
-  MACD_ABS_GAP_MIN_<SYM> = price * 0.0003
-  SIGNAL_MIN_VALUE_<SYM> = clamp(price * 0.00034, 0.08, 0.10)
+MACD_ABS_GAP_MIN_<SYM> is kept in settings.td for reference but is currently
+not checked in the production entry logic — it is updated here using the
+price * 0.0003 formula so it tracks price regardless.
+
+Run after market close each trading day (e.g. 4:15 PM ET).
 """
 
+import csv
+import math
 import os
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+from itertools import product
 from zoneinfo import ZoneInfo
+
 from dotenv import load_dotenv
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestBarRequest
 
 load_dotenv("keys.env")
-API_KEY = os.getenv("APCA_API_KEY_ID")
+API_KEY    = os.getenv("APCA_API_KEY_ID")
 SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 
 SETTINGS_FILE = "settings.td"
+LOG_DIR       = "order_dashboard/indicator_logs"
+PT            = ZoneInfo("America/Los_Angeles")
+
+NaN = float("nan")
+
+# ── helpers ──────────────────────────────────────────────────────────────────
 
 def read_settings(path):
     with open(path, "r") as f:
         return f.read()
 
+def get_value(content, key, default=None):
+    m = re.search(rf"^{re.escape(key)}=(.+)$", content, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+    return default
+
 def get_stock_list(content):
-    m = re.search(r"^STOCK_LIST=(.+)$", content, re.MULTILINE)
-    if not m:
-        raise ValueError("STOCK_LIST not found in settings.td")
-    return [s.strip() for s in m.group(1).split(",")]
-
-def fetch_close_prices(symbols):
-    client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
-    req = StockLatestBarRequest(symbol_or_symbols=symbols)
-    bars = client.get_stock_latest_bar(req)
-    prices = {}
-    for sym, bar in bars.items():
-        prices[sym] = bar.close
-    return prices
-
-def compute_thresholds(price):
-    macd_min   = f"{price * 0.0005:.2f}"
-    abs_gap    = f"{price * 0.0003:.2f}"
-    signal_min = f"{min(max(price * 0.00034, 0.08), 0.10):.2f}"
-    return macd_min, abs_gap, signal_min
+    raw = get_value(content, "STOCK_LIST", "")
+    return [s.strip() for s in raw.split(",") if s.strip()]
 
 def update_setting(content, key, value):
-    pattern = rf"^({re.escape(key)}=).*$"
+    pattern  = rf"^({re.escape(key)}=).*$"
     new_line = rf"\g<1>{value}"
     updated, n = re.subn(pattern, new_line, content, flags=re.MULTILINE)
     if n == 0:
-        # Key doesn't exist yet — append before the blank line at end or at end
         updated = content.rstrip() + f"\n{key}={value}\n"
     return updated
+
+# ── indicator-log loading ─────────────────────────────────────────────────────
+
+def load_csv(path):
+    rows = []
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames or "close" not in reader.fieldnames:
+                return []
+            for r in reader:
+                try:
+                    rows.append({
+                        "ts":   datetime.fromisoformat(r["timestamp"]).replace(tzinfo=PT),
+                        "px":   float(r["close"]),
+                        "macd": float(r["MACD"]),
+                        "sig":  float(r["Signal"]),
+                        "rsi":  float(r["RSI"]),
+                    })
+                except (ValueError, KeyError):
+                    continue
+    except FileNotFoundError:
+        pass
+    return rows
+
+def load_all_days(sym):
+    """Return list of day-rows lists for all available CSVs for this symbol."""
+    days = []
+    if not os.path.isdir(LOG_DIR):
+        return days
+    for fname in sorted(os.listdir(LOG_DIR)):
+        if fname.startswith(f"{sym}_") and fname.endswith(".csv"):
+            rows = load_csv(os.path.join(LOG_DIR, fname))
+            if rows:
+                days.append(rows)
+    return days
+
+# ── replay engine (mirrors production logic exactly) ─────────────────────────
+
+BUF_SIZE     = 5
+RSI_MIN      = 50.0
+RSI_BUF_SIZE = 5
+
+def replay(days, budget, stop_loss_pct, profit_take_pct,
+           macd_min, gap_pct_thresh, sig_min, cooldown_min=10):
+    """
+    Replay all days for one symbol with given params.
+    Each day is independent (buffers reset between days).
+    Returns total P&L across all days.
+    """
+    total_pl = 0.0
+
+    for rows in days:
+        macd_buf = []
+        rsi_buf  = []
+        pos_macd = [NaN] * BUF_SIZE   # position MACD buffer (post-entry)
+
+        pos       = 0
+        shares    = 0
+        entry_px  = 0.0
+        last_ts   = datetime.min.replace(tzinfo=PT)
+        cooldown  = cooldown_min
+
+        for i, bar in enumerate(rows):
+            macd = bar["macd"]
+            sig  = bar["sig"]
+            rsi  = bar["rsi"]
+            px   = bar["px"]
+            ts   = bar["ts"]
+
+            macd_buf.append(macd)
+            if len(macd_buf) > BUF_SIZE:
+                macd_buf.pop(0)
+            rsi_buf.append(rsi)
+            if len(rsi_buf) > RSI_BUF_SIZE:
+                rsi_buf.pop(0)
+
+            prev_macd = rows[i-1]["macd"] if i > 0 else NaN
+            prev_sig  = rows[i-1]["sig"]  if i > 0 else NaN
+
+            if pos > 0:
+                # update position MACD buffer
+                if math.isnan(pos_macd[1]):
+                    pos_macd[1] = macd
+                elif math.isnan(pos_macd[2]):
+                    pos_macd[2] = macd
+                elif math.isnan(pos_macd[3]):
+                    pos_macd[3] = macd
+                elif math.isnan(pos_macd[4]):
+                    pos_macd[4] = macd
+                else:
+                    pos_macd = pos_macd[1:] + [macd]
+
+                pct = (px - entry_px) / entry_px * 100
+
+                # stop-loss
+                if pct < -stop_loss_pct:
+                    total_pl += (px - entry_px) * shares
+                    pos = 0
+                    last_ts = ts
+                    pos_macd = [NaN] * BUF_SIZE
+                    continue
+
+                # take-profit
+                if (px - entry_px) * shares >= (profit_take_pct / 100) * budget:
+                    total_pl += (px - entry_px) * shares
+                    pos = 0
+                    last_ts = ts
+                    pos_macd = [NaN] * BUF_SIZE
+                    continue
+
+                # MACD exit: b4 < b2 AND d2 < 0
+                if not any(math.isnan(v) for v in pos_macd):
+                    b0, b1, b2, b3, b4 = pos_macd
+                    if not (b0 < b1 < b2 < b3 < b4):
+                        d2 = b4 - b3
+                        if b4 < b2 and d2 < 0:
+                            total_pl += (px - entry_px) * shares
+                            pos = 0
+                            last_ts = ts
+                            pos_macd = [NaN] * BUF_SIZE
+                continue
+
+            # ── entry checks ────────────────────────────────────────────────
+
+            # MACD floor + regime gate
+            if macd <= 0 or macd < macd_min:
+                continue
+            if math.isnan(prev_macd) or prev_macd < macd_min:
+                continue   # need confirmation bar above floor
+
+            # gap% in trending regime
+            if sig == 0:
+                continue
+            gap = ((macd - sig) / abs(sig)) * 100
+            if gap <= gap_pct_thresh:
+                continue
+
+            # signal established and rising
+            if abs(sig) < sig_min:
+                continue
+            if math.isnan(prev_sig) or sig <= prev_sig:
+                continue
+
+            # 5-bar monotonic MACD
+            if len(macd_buf) < BUF_SIZE:
+                continue
+            if not (macd_buf[0] < macd_buf[1] < macd_buf[2] < macd_buf[3] < macd_buf[4]):
+                continue
+
+            # RSI zone: all 5 bars >= 50 and current >= previous
+            if len(rsi_buf) < RSI_BUF_SIZE:
+                continue
+            if not all(v >= RSI_MIN for v in rsi_buf):
+                continue
+            prev_rsi = rows[i-1]["rsi"] if i > 0 else rsi
+            if rsi < prev_rsi:
+                continue
+
+            # cooldown
+            if (ts - last_ts).total_seconds() / 60 < cooldown:
+                continue
+
+            shares  = int(budget / px)
+            if shares == 0:
+                continue
+            entry_px = px
+            pos      = shares
+            last_ts  = ts
+            pos_macd = [macd, NaN, NaN, NaN, NaN]
+
+        # day ended with open position — mark to close
+        if pos > 0:
+            total_pl += (rows[-1]["px"] - entry_px) * shares
+
+    return total_pl
+
+
+# ── candidate generation ──────────────────────────────────────────────────────
+
+def candidates_macd_min(price):
+    """7 candidates bracketing price * 0.0005."""
+    base = price * 0.0005
+    factors = [0.20, 0.30, 0.40, 0.50, 0.65, 0.80, 1.00, 1.20, 1.50]
+    vals = sorted({round(base * f, 2) for f in factors})
+    return [v for v in vals if v > 0]
+
+def candidates_gap_pct():
+    return [20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+def candidates_sig_min(price):
+    """6 candidates around price * 0.00034, clamped to [0.06, 0.14]."""
+    base = price * 0.00034
+    factors = [0.50, 0.65, 0.80, 1.00, 1.20, 1.50]
+    raw = sorted({round(base * f, 2) for f in factors})
+    return [min(max(v, 0.06), 0.14) for v in raw]
+
+
+# ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
     content = read_settings(SETTINGS_FILE)
     symbols = get_stock_list(content)
 
-    print(f"Fetching closing prices for: {', '.join(symbols)}")
-    prices = fetch_close_prices(symbols)
+    stop_loss_pct   = float(get_value(content, "STOP_LOSS_PERCENT",         "0.35"))
+    profit_take_pct = float(get_value(content, "PROFIT_TAKE_DEFAULT",        "0.50"))
+    budget          = float(get_value(content, "DEFAULT_DOLLAR",             "5000"))
+    cooldown_min    = int(  get_value(content, "MIN_TRADE_COOLDOWN_MINUTES", "10"))
 
-    ET = ZoneInfo("America/New_York")
-    now_et = datetime.now(ET)
-    date_str = now_et.strftime("%Y-%m-%d")
+    print(f"Fetching latest closing prices for: {', '.join(symbols)}")
+    data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
+    bars = data_client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=symbols))
+    prices = {sym: bars[sym].close for sym in symbols if sym in bars}
 
-    print(f"\nRecalibrating settings.td using prices from {date_str}:")
-    print(f"{'Symbol':<8} {'Close':>8}  {'MACD_MIN':>10}  {'ABS_GAP':>9}  {'SIG_MIN':>9}")
-    print("-" * 55)
+    ET       = ZoneInfo("America/New_York")
+    date_str = datetime.now(ET).strftime("%Y-%m-%d")
+
+    print(f"\nRunning sweep on indicator logs in '{LOG_DIR}/'")
+    print(f"Fixed params — stop-loss: {stop_loss_pct}%  profit-take: {profit_take_pct}%  budget: ${budget:.0f}\n")
+
+    best_params = {}
 
     for sym in symbols:
-        if sym not in prices:
+        price = prices.get(sym)
+        if price is None:
             print(f"  {sym}: no price data, skipping")
             continue
-        price = prices[sym]
-        macd_min, abs_gap, signal_min = compute_thresholds(price)
-        print(f"{sym:<8} {price:>8.2f}  {macd_min:>10}  {abs_gap:>9}  {signal_min:>9}")
 
-        content = update_setting(content, f"MACD_MIN_VALUE_{sym}", macd_min)
-        content = update_setting(content, f"MACD_ABS_GAP_MIN_{sym}", abs_gap)
-        content = update_setting(content, f"SIGNAL_MIN_VALUE_{sym}", signal_min)
+        days = load_all_days(sym)
+        if not days:
+            print(f"  {sym}: no indicator logs found, skipping")
+            continue
 
-    # Update the reference comment line
+        # per-symbol budget override
+        sym_budget_raw = get_value(content, "DOLLAR_BUDGETS", "")
+        sym_budget = budget
+        for part in sym_budget_raw.split(","):
+            if ":" in part:
+                s, v = part.split(":", 1)
+                if s.strip() == sym:
+                    sym_budget = float(v.strip())
+
+        # per-symbol profit-take override
+        pt = float(get_value(content, f"PROFIT_TAKE_{sym}", str(profit_take_pct)))
+
+        c_macd = candidates_macd_min(price)
+        c_gap  = candidates_gap_pct()
+        c_sig  = candidates_sig_min(price)
+        n_days = len(days)
+
+        print(f"  {sym}  price=${price:.2f}  days={n_days}  "
+              f"combos={len(c_macd)}×{len(c_gap)}×{len(c_sig)}={len(c_macd)*len(c_gap)*len(c_sig)}")
+
+        best_pl   = None
+        best_combo = None
+
+        for macd_min, gap_pct, sig_min in product(c_macd, c_gap, c_sig):
+            pl = replay(days, sym_budget, stop_loss_pct, pt,
+                        macd_min, gap_pct, sig_min, cooldown_min)
+            if best_pl is None or pl > best_pl:
+                best_pl    = pl
+                best_combo = (macd_min, gap_pct, sig_min)
+
+        macd_min, gap_pct, sig_min = best_combo
+        abs_gap = f"{price * 0.0003:.2f}"   # kept for reference, not live in entry logic
+
+        best_params[sym] = {
+            "macd_min":  f"{macd_min:.2f}",
+            "gap_pct":   gap_pct,
+            "sig_min":   f"{sig_min:.2f}",
+            "abs_gap":   abs_gap,
+            "best_pl":   best_pl,
+        }
+        print(f"    best: MACD_MIN={macd_min:.2f}  GAP%={gap_pct}  SIG_MIN={sig_min:.2f}  "
+              f"ABS_GAP={abs_gap}(ref)  sim_PL=${best_pl:+.2f}")
+
+    # ── write to settings.td ─────────────────────────────────────────────────
+    print(f"\nUpdating {SETTINGS_FILE} ...")
+
     syms_comment = ", ".join(
         f"{s}~${prices[s]:.0f}" for s in symbols if s in prices
     )
     new_comment = f"# Prices from 4pm ET close {date_str}: {syms_comment}"
-    content = re.sub(
-        r"^# Prices from 4pm ET close .*$",
-        new_comment,
-        content,
-        flags=re.MULTILINE,
-    )
-    # If comment line didn't exist, add it before the first MACD_MIN_VALUE_ line
+    content = re.sub(r"^# Prices from 4pm ET close .*$", new_comment,
+                     content, flags=re.MULTILINE)
     if "# Prices from 4pm ET close" not in content:
-        content = re.sub(
-            r"(^MACD_MIN_VALUE_)",
-            new_comment + "\n" + r"\1",
-            content,
-            count=1,
-            flags=re.MULTILINE,
-        )
+        content = re.sub(r"(^MACD_MIN_VALUE_)", new_comment + "\n" + r"\1",
+                         content, count=1, flags=re.MULTILINE)
+
+    for sym, p in best_params.items():
+        content = update_setting(content, f"MACD_MIN_VALUE_{sym}",   p["macd_min"])
+        content = update_setting(content, f"MACD_ABS_GAP_MIN_{sym}", p["abs_gap"])
+        content = update_setting(content, f"MACD_GAP_PERCENT_{sym}", p["gap_pct"])
+        content = update_setting(content, f"SIGNAL_MIN_VALUE_{sym}", p["sig_min"])
 
     with open(SETTINGS_FILE, "w") as f:
         f.write(content)
 
+    print(f"\n{'Symbol':<8} {'Price':>8}  {'MACD_MIN':>10}  {'GAP%':>6}  {'SIG_MIN':>8}  {'Sim P&L':>10}")
+    print("-" * 60)
+    for sym in symbols:
+        if sym not in best_params:
+            continue
+        p = best_params[sym]
+        print(f"{sym:<8} {prices[sym]:>8.2f}  {p['macd_min']:>10}  {p['gap_pct']:>6}  "
+              f"{p['sig_min']:>8}  ${p['best_pl']:>+9.2f}")
+
     print(f"\nsettings.td updated.")
+    print(f"\nNote: MACD_ABS_GAP_MIN_<SYM> is written (price×0.0003) but is not currently")
+    print(f"      active in the entry logic — it tracks price as a reference only.")
+
 
 if __name__ == "__main__":
     main()
