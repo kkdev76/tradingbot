@@ -9,13 +9,16 @@ import websockets
 import logging
 import time
 import sys
+import signal
+import threading
+import atexit
 from datetime import datetime, timezone, timedelta, time as datetime_time
 from dotenv import load_dotenv
 from buy_order import place_buy
 from sell_order import place_sell, place_sell_market
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderStatus, OrderSide
-from alpaca.trading.requests import ClosePositionRequest
+from alpaca.trading.requests import ClosePositionRequest, GetCalendarRequest
 
 # Logging to file only
 
@@ -442,8 +445,13 @@ def _list_positions_len(client: TradingClient) -> int:
         log(f"⚠️ list positions failed: {e}")
         return 0
 
-def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = ""):
-    """Cancels orders, liquidates all positions, blocks further orders, exits process."""
+def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = "", hard_exit: bool = False):
+    """Cancels orders, liquidates all positions, blocks further orders, exits process.
+
+    hard_exit=True forces termination via os._exit() — required when called from a
+    background thread (e.g. the shutdown watchdog), since sys.exit() only unwinds the
+    calling thread and would leave the process alive.
+    """
     global STOP_TRADING
     STOP_TRADING = True
     try:
@@ -491,7 +499,10 @@ def trigger_global_liquidation_and_exit(client: TradingClient, reason: str = "")
                     shutil.move(src, dst)
             except Exception:
                 pass
-            sys.exit(2)
+            if hard_exit:
+                os._exit(2)
+            else:
+                sys.exit(2)
 
 def risk_guard_check(client: TradingClient):
     """Run at most once per minute. If daily P/L <= threshold, liquidate and exit."""
@@ -681,48 +692,26 @@ def bootstrap_history(sym: str):
         log(f"⚠️ {sym}: Bootstrap failed ({e}) — will warm up from live bars.")
 
 # Real-time bar handling
-def scheduled_shutdown_guard_check(client: TradingClient):
+def daily_pl_guard_check(client: TradingClient):
     """
-    At CRON_SHUTDOWN time (PST/PDT), cancel all orders, liquidate, and exit.
+    Bar-driven safety net: if today's P/L breaches NEGATIVE_PL_THRESHOLD, liquidate and exit.
+
+    NOTE: time-based daily shutdown is no longer handled here — it now runs in an
+    independent wall-clock watchdog thread (_shutdown_watchdog) so it fires even when
+    no market data is flowing (holiday, outage, reconnect storm).
     """
     global _last_shutdown_check_minute, STOP_TRADING
 
-    # log(f"🕒 [ShutdownGuard] Check start")
-
     if STOP_TRADING:
-        log(f"🛑 [ShutdownGuard] Trading halted; skipping shutdown check")
         return  # Already halted
-
-    shutdown_time_str = os.getenv("CRON_SHUTDOWN", "").strip()
-    if not shutdown_time_str:
-        # log(f"⏭️ [ShutdownGuard] CRON_SHUTDOWN not set; skipping")
-        return  # Disabled if not set
-
-    try:
-        shutdown_hour, shutdown_minute = map(int, shutdown_time_str.split(":"))
-        # log(f"✅ [ShutdownGuard] Parsed shutdown time {shutdown_hour:02d}:{shutdown_minute:02d} PT")
-    except Exception:
-        log(f"❌ Invalid CRON_SHUTDOWN value: {shutdown_time_str}")
-        return
 
     now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
     minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
 
-    # Avoid repeating shutdown check more than once per minute
+    # Avoid repeating the check more than once per minute
     if _last_shutdown_check_minute == minute_key:
-        # log(f"⏭️ [ShutdownGuard] Already checked at {minute_key}; skipping")
         return
     _last_shutdown_check_minute = minute_key
-    # log(f"✅ [ShutdownGuard] Marked shutdown check at {minute_key}")
-
-    if now_pt.hour == shutdown_hour and now_pt.minute == shutdown_minute:
-        log(f"⚠️ [ScheduledShutdown] Triggering daily shutdown at {shutdown_time_str} PT")
-        trigger_global_liquidation_and_exit(
-            client,
-            reason=f"Scheduled shutdown at {shutdown_time_str} PT"
-        )
-    # else:
-        # log(f"🕒 [ShutdownGuard] Not shutdown time yet (now {now_pt.strftime('%H:%M')} PT)")
 
     try:
         daily_pl = get_daily_pl(client)
@@ -760,10 +749,9 @@ async def handle_bar(bar: dict):
     # log(f"🛡️ Running risk_guard_check for {sym}")
     risk_guard_check(trading_client)
     
-    # ===== Scheduled Shutdown: check once per minute =====
-    # log(f"🕒 Running scheduled_shutdown_guard_check for {sym}")
-    scheduled_shutdown_guard_check(trading_client)
-    # ===== Scheduled Shutdown: check once per minute =====
+    # ===== Daily P/L breach guard: check once per minute =====
+    daily_pl_guard_check(trading_client)
+    # ===== Daily P/L breach guard: check once per minute =====
 
 
     ts = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
@@ -1056,6 +1044,116 @@ async def handle_bar(bar: dict):
     # log(f"🏁 ========= handle_bar end for {sym}")
 
 
+# ===== Startup guards (run once, before the reconnect loop) =====
+_PIDFILE = "/tmp/macdbot.pid"
+
+
+def is_trading_day_today() -> bool:
+    """True if today (PT) is a market session day, per Alpaca's calendar.
+
+    Prevents the bot from launching on holidays/weekends (a holiday launch with no
+    market data was what seeded the duplicate-instance cascade)."""
+    today = datetime.now(ZoneInfo("America/Los_Angeles")).date()
+    try:
+        cal = trading_client.get_calendar(GetCalendarRequest(start=today, end=today))
+        return len(cal) >= 1
+    except Exception as e:
+        # Don't block trading on a transient calendar API error — fail open, but log loudly.
+        log(f"⚠️ [Calendar] check failed ({e}); assuming today IS a trading day.")
+        return True
+
+
+def _proc_is_our_bot(pid: int) -> bool:
+    """True only if pid is alive AND its cmdline is this script (guards against PID reuse)."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            cmd = f.read().replace(b"\x00", b" ").decode("utf-8", "ignore")
+        return "multi_symbol_macd_stream" in cmd
+    except Exception:
+        return False
+
+
+def _release_singleton():
+    """atexit: remove the pidfile only if it's still ours (avoid clobbering a successor)."""
+    try:
+        if os.path.exists(_PIDFILE):
+            with open(_PIDFILE) as f:
+                if (f.read().strip() or "0") == str(os.getpid()):
+                    os.remove(_PIDFILE)
+    except Exception:
+        pass
+
+
+def acquire_singleton():
+    """Last-wins: terminate any existing bot instance, then claim the pidfile.
+
+    The freshly-launched process always wins so it runs with today's correct date/state
+    and a clean Alpaca connection (the data stream allows only one connection per account)."""
+    try:
+        if os.path.exists(_PIDFILE):
+            with open(_PIDFILE) as f:
+                old = int(f.read().strip() or "0")
+            if old and old != os.getpid() and _proc_is_our_bot(old):
+                log(f"🔫 [Singleton] Existing instance PID {old} found — terminating (last-wins).")
+                try:
+                    os.kill(old, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                # Wait up to 8s for it to die and release the Alpaca socket.
+                deadline = time.time() + 8
+                while time.time() < deadline:
+                    try:
+                        os.kill(old, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.5)
+                else:
+                    log(f"🔪 [Singleton] PID {old} still alive — SIGKILL.")
+                    try:
+                        os.kill(old, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    time.sleep(1)
+    except Exception as e:
+        log(f"⚠️ [Singleton] takeover check failed: {e}")
+    try:
+        with open(_PIDFILE, "w") as f:
+            f.write(str(os.getpid()))
+        atexit.register(_release_singleton)
+        log(f"🔒 [Singleton] Claimed pidfile {_PIDFILE} (PID {os.getpid()}).")
+    except Exception as e:
+        log(f"⚠️ [Singleton] could not write pidfile: {e}")
+
+
+def shutdown_watchdog():
+    """Wall-clock daemon thread: liquidate + hard-exit at CRON_SHUTDOWN (PT).
+
+    Independent of the websocket, so it fires even with no market data. Level-triggered
+    (>= shutdown time) so a missed minute can't strand the process into the next day."""
+    raw = os.getenv("CRON_SHUTDOWN", "").strip()
+    if not raw:
+        log("⏭️ [Watchdog] CRON_SHUTDOWN not set — daily shutdown watchdog DISABLED.")
+        return
+    try:
+        sh, sm = map(int, raw.split(":"))
+    except Exception:
+        log(f"❌ [Watchdog] Invalid CRON_SHUTDOWN '{raw}' — watchdog disabled.")
+        return
+    log(f"🕒 [Watchdog] Armed for {sh:02d}:{sm:02d} PT daily shutdown.")
+    while True:
+        now = datetime.now(ZoneInfo("America/Los_Angeles"))
+        if (now.hour, now.minute) >= (sh, sm):
+            log(f"⚠️ [Watchdog] Shutdown time reached ({now.strftime('%H:%M')} PT >= "
+                f"{sh:02d}:{sm:02d}) — liquidating and exiting.")
+            trigger_global_liquidation_and_exit(
+                trading_client,
+                reason=f"Scheduled shutdown at {sh:02d}:{sm:02d} PT",
+                hard_exit=True,
+            )
+            return  # unreachable: os._exit already fired
+        time.sleep(15)
+
+
 # Main loop
 async def main():
     for sym in SYMBOLS:
@@ -1098,8 +1196,24 @@ async def main():
                     ap = m.get('ap', 0.0)
                     latest_quote[sym_q] = (bp, ap)
                     # log(f"💬 QUOTE {sym_q}: bid={bp:.2f}, ask={ap:.2f}")
+
+                elif msg_type in ('error', 'success', 'subscription'):
+                    # Surface Alpaca control frames (e.g. {"T":"error","code":406,
+                    # "msg":"connection limit exceeded"}) instead of silently dropping them.
+                    log(f"📡 [Alpaca] control: {m}")
     
 if __name__ == '__main__':
+    # ===== Pre-flight (runs once, before the reconnect loop) =====
+    # 1) Don't run on market holidays/weekends (the holiday-launch case that seeded
+    #    the duplicate-instance cascade).
+    if not is_trading_day_today():
+        log("🛑 Not a trading session today (holiday/weekend) — exiting.")
+        sys.exit(0)
+    # 2) Singleton, last-wins: kill any leftover instance and claim the connection.
+    acquire_singleton()
+    # 3) Wall-clock shutdown watchdog, independent of market data.
+    threading.Thread(target=shutdown_watchdog, name="shutdown-watchdog", daemon=True).start()
+
     # Auto-reconnect loop: restarts main() on any WebSocket/network crash.
     # SystemExit (raised by halt_trading → sys.exit(2)) is a BaseException, NOT
     # a subclass of Exception, so it propagates out of the loop cleanly on
