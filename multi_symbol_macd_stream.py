@@ -61,6 +61,15 @@ SIGNAL_MIN_VALUE = float(os.getenv('SIGNAL_MIN_VALUE', '0.08'))
 RSI_PERIOD = int(os.getenv('RSI_PERIOD', '9'))
 RSI_BUY_MIN = float(os.getenv('RSI_BUY_MIN', '50'))
 RSI_BUY_MAX = float(os.getenv('RSI_BUY_MAX', '65'))
+# Price-stall guard (two-window deceleration): MACD is lagging, so it can keep climbing
+# after price has stalled — causing entries right as the move exhausts. Over the last
+# STALL_WINDOW closes, compare the EARLIER segment's pace to the most-recent STALL_RECENT
+# samples: if price was advancing earlier but the recent samples have decelerated below
+# STALL_DECEL_RATIO of that pace (or gone flat/negative) while MACD rises, the rise is
+# "hollow" — skip the buy. Unit-free (a pace ratio), so no per-symbol/$ tuning.
+STALL_WINDOW      = 10    # total samples examined
+STALL_RECENT      = 4     # most-recent samples checked for the stall
+STALL_DECEL_RATIO = 0.30  # recent pace must be >= this fraction of the earlier pace
 BOOTSTRAP_BAR_COUNT  = int(os.getenv('BOOTSTRAP_BAR_COUNT', '800'))
 BOOTSTRAP_MAX_DAYS_BACK = int(os.getenv('BOOTSTRAP_MAX_DAYS_BACK', '5'))
 MACD_WARMUP_BARS = int(os.getenv('MACD_WARMUP_BARS', '35'))
@@ -186,6 +195,33 @@ def is_rsi_monotonically_increasing(sym: str) -> bool:
     if len(buffer) < RSI_BUFFER_SIZE:
         return False
     return all(v >= RSI_BUY_MIN for v in buffer) and buffer[-1] >= buffer[-2]
+
+def price_confirms_macd_rise(df) -> tuple:
+    """Two-window deceleration guard for a 'hollow' MACD rise (lagging-indicator trap).
+
+    Splits the last STALL_WINDOW closes into an earlier segment and the most-recent
+    STALL_RECENT samples, then compares their per-bar pace:
+      earlier_pace = price move over the earlier segment, per bar
+      recent_pace  = price move over the recent samples, per bar
+    If price was advancing earlier (earlier_pace > 0) but the recent samples have
+    stalled — recent_pace <= 0, or below STALL_DECEL_RATIO of earlier_pace — the MACD
+    rise is not backed by price and the entry is skipped.
+
+    Returns (confirms, earlier_pace, recent_pace):
+      confirms=True  → price still advancing, or no prior up-move to stall from (allow)
+      confirms=False → recent stall while MACD rises (block)
+    On insufficient data, returns (True, nan, nan) so it never blocks during warmup.
+    """
+    closes = df['close'].tail(STALL_WINDOW).to_numpy(dtype=float)
+    if len(closes) < STALL_WINDOW:
+        return True, float('nan'), float('nan')
+    earlier_pace = (closes[-STALL_RECENT] - closes[0]) / (STALL_WINDOW - STALL_RECENT)
+    recent_pace  = (closes[-1] - closes[-STALL_RECENT]) / (STALL_RECENT - 1)
+    if earlier_pace <= 0:
+        return True, earlier_pace, recent_pace   # no prior up-move — nothing to stall from
+    stalled = recent_pace <= 0 or (recent_pace / earlier_pace) < STALL_DECEL_RATIO
+    return (not stalled), earlier_pace, recent_pace
+
 
 def update_position_macd_buffer(sym: str, macd: float):
     """
@@ -1010,12 +1046,15 @@ async def handle_bar(bar: dict):
                 log(f"[RiskGuard] Blocked BUY {sym} (trading halted)")
                 return
 
+            price_ok, earlier_pace, recent_pace = price_confirms_macd_rise(df)
             if not is_increasing:
                 log(f"💀 {sym}: Skipping BUY — MACD not monotonically increasing {[f'{v:.4f}' for v in macd_buffer[sym]]}")
             elif not rsi_in_zone:
                 log(f"💀 {sym}: Skipping BUY — RSI {rsi_val:.2f} below floor {RSI_BUY_MIN}")
             elif not rsi_increasing:
                 log(f"💀 {sym}: Skipping BUY — RSI not stable ≥{RSI_BUY_MIN} {[f'{v:.2f}' for v in rsi_buffer[sym]]}")
+            elif not price_ok:
+                log(f"💀 {sym}: Skipping BUY — price STALLED (recent {STALL_RECENT}-bar pace {recent_pace:+.4f} vs earlier {earlier_pace:+.4f} over {STALL_WINDOW} bars) while MACD rising")
             else:
                 bid, _ = fetch_quote(sym)
                 if bid <= 0:
