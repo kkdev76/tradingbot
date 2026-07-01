@@ -46,3 +46,6 @@ archive/
 
 # Claude Code local tooling / worktrees (not project code)
 .claude/
+
+# Machine-specific settings variants (the tracked config is settings.td only)
+settings-*.td
