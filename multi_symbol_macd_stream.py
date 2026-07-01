@@ -1025,19 +1025,12 @@ async def handle_bar(bar: dict):
 
     # BUY logic with cooldown
     if pos == 0:
-        # log(f"🧮 Path: BUY evaluation for {sym}")
-        # If a BUY was placed earlier but never filled, there could be open/working orders.
-        # Proactively cancel any such orders for this symbol and reset tracking vars.
-        stale = _cancel_open_orders_for_symbol(trading_client, sym)
-        if stale > 0:
-            last_trade_time[sym] = datetime.min.replace(tzinfo=timezone.utc)
-            log(f"🔄 Reset last_trade_time after canceling {stale} stale order(s) for {sym}")
-        # else:
-            # log(f"🧹 No stale open orders to cancel for {sym}")
-
-        # Entry-time cutoff (NO_NEW_ENTRIES_AFTER, PT): block opening NEW positions
-        # past the cutoff. entry_cutoff_reached() returns the flag; exits and logging
-        # already ran above, so the rest of the bar proceeds — we simply skip the buy.
+        # Entry-time cutoff FIRST (NO_NEW_ENTRIES_AFTER, PT): once past the cutoff we
+        # open no new positions, so for a FLAT symbol there is nothing to do. Return
+        # immediately — BEFORE any Alpaca call — so nothing downstream assumes a buy
+        # that never happened: no stale-order cancels, no order management, no log
+        # spam through the afternoon. (Held positions are handled in the exit block
+        # above, which runs before this and acts on the real Alpaca position.)
         buy_blocked = entry_cutoff_reached()
         if buy_blocked:
             global _entry_cutoff_logged
@@ -1045,6 +1038,16 @@ async def handle_bar(bar: dict):
                 log(f"🕒 Entry cutoff {NO_NEW_ENTRIES_AFTER[0]:02d}:{NO_NEW_ENTRIES_AFTER[1]:02d} PT reached — no new entries; managing open positions only.")
                 _entry_cutoff_logged = True
             return
+
+        # Before the cutoff: if a BUY was placed earlier but never filled, there could
+        # be open/working orders. Proactively cancel any such orders for this symbol
+        # and reset tracking vars.
+        stale = _cancel_open_orders_for_symbol(trading_client, sym)
+        if stale > 0:
+            last_trade_time[sym] = datetime.min.replace(tzinfo=timezone.utc)
+            log(f"🔄 Reset last_trade_time after canceling {stale} stale order(s) for {sym}")
+        # else:
+            # log(f"🧹 No stale open orders to cancel for {sym}")
 
         sig_rising = (not math.isnan(sig_prev)) and (sig > sig_prev)
 
