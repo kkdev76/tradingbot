@@ -15,14 +15,13 @@ import csv
 import math
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from itertools import product
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.requests import StockLatestTradeRequest
 
 load_dotenv("keys.env")
 API_KEY    = os.getenv("APCA_API_KEY_ID")
@@ -292,23 +291,18 @@ def main():
             entry_cutoff = None
 
     ET = ZoneInfo("America/New_York")
-    print(f"Fetching official daily closing prices for: {', '.join(symbols)}")
+    print(f"Fetching current (pre-open) prices for: {', '.join(symbols)}")
     data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
     feed = get_value(content, "HISTORICAL_FEED", "iex")
-    daily = data_client.get_stock_bars(StockBarsRequest(
-        symbol_or_symbols=symbols,
-        timeframe=TimeFrame.Day,
-        start=datetime.now(timezone.utc) - timedelta(days=7),
-        feed=feed,
-    ))
-    # Most recent completed daily bar = the day's official 4pm ET RTH close.
-    prices    = {}
-    date_str  = datetime.now(ET).strftime("%Y-%m-%d")
-    for sym in symbols:
-        rows = daily.data.get(sym, [])
-        if rows:
-            prices[sym] = rows[-1].close
-            date_str    = rows[-1].timestamp.astimezone(ET).strftime("%Y-%m-%d")
+    # Use the LATEST TRADE price at recalibration time (runs just before the open),
+    # so overnight / pre-market moves are reflected. The prior session's close can be
+    # stale if the stock gapped — thresholds are anchored to price, so they must track
+    # where the stock actually is right before we start trading it today.
+    trades   = data_client.get_stock_latest_trade(
+        StockLatestTradeRequest(symbol_or_symbols=symbols, feed=feed))
+    prices   = {sym: trades[sym].price for sym in symbols if sym in trades}
+    now_et   = datetime.now(ET)
+    date_str = now_et.strftime("%Y-%m-%d")
 
     cutoff_desc = f"{entry_cutoff[0]:02d}:{entry_cutoff[1]:02d} PT" if entry_cutoff else "none"
     print(f"\nRunning sweep on indicator logs in '{LOG_DIR}/'")
@@ -374,10 +368,10 @@ def main():
     syms_comment = ", ".join(
         f"{s}~${prices[s]:.0f}" for s in symbols if s in prices
     )
-    new_comment = f"# Prices from 4pm ET close {date_str}: {syms_comment}"
-    content = re.sub(r"^# Prices from 4pm ET close .*$", new_comment,
-                     content, flags=re.MULTILINE)
-    if "# Prices from 4pm ET close" not in content:
+    stamp = now_et.strftime("%Y-%m-%d %H:%M ET")
+    new_comment = f"# Prices at pre-open recalibration {stamp}: {syms_comment}"
+    content, n = re.subn(r"^# Prices .*$", new_comment, content, count=1, flags=re.MULTILINE)
+    if n == 0:
         content = re.sub(r"(^MACD_MIN_VALUE_)", new_comment + "\n" + r"\1",
                          content, count=1, flags=re.MULTILINE)
 
