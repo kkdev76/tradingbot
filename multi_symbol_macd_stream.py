@@ -91,6 +91,16 @@ def _parse_hhmm(raw):
 
 NO_NEW_ENTRIES_AFTER = _parse_hhmm(os.getenv('NO_NEW_ENTRIES_AFTER', ''))
 _entry_cutoff_logged = False
+
+def entry_cutoff_reached() -> bool:
+    """True once the PT wall-clock is at/after NO_NEW_ENTRIES_AFTER — i.e. opening
+    new BUYs is blocked. Uses America/Los_Angeles, the same PT approach as the 12:55
+    shutdown watchdog, so on a UTC server we never mix time zones. Only gates NEW
+    entries; exits, logging, and everything else keep running."""
+    if NO_NEW_ENTRIES_AFTER is None:
+        return False
+    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
+    return (now_pt.hour, now_pt.minute) >= NO_NEW_ENTRIES_AFTER
 WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 
 # ===== Risk Guard config =====
@@ -790,19 +800,8 @@ async def handle_bar(bar: dict):
     global _last_delimiter_minute
     sym = bar['S']
 
-    # Print a minute delimiter once per minute across all symbols
-    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
-    minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
-    if _last_delimiter_minute != minute_key:
-        _last_delimiter_minute = minute_key
-        log(f"{'='*10} 📊 {now_pt.strftime('%H:%M')} PT {'='*10}")
-
-    # Entry log for this bar processing
-    # try:
-    #     ts_dbg = datetime.fromisoformat(bar['t'].replace('Z', '+00:00'))
-    #     log(f"🧭========  handle_bar start for {sym} at {ts_dbg.isoformat()}")
-    # except Exception:
-    #     log(f"🧭 handle_bar start for {sym} (timestamp parse failed)")
+    # (minute delimiter + all per-bar logging moved below the session gate — nothing
+    #  is logged or traded before the 06:30 PT open; see the regular-session block.)
 
     # ===== Guards: run once per minute =====
     # log(f"🛡️ Running risk_guard_check for {sym}")
@@ -840,20 +839,29 @@ async def handle_bar(bar: dict):
     rsi_increasing = is_rsi_monotonically_increasing(sym)
     rsi_in_zone = rsi_val >= RSI_BUY_MIN
 
-    # Log indicators to per-symbol CSV — skip during warmup (NaN values not useful)
+    # Trading, logging, and the minute delimiter all start at the 06:30 PT / 09:30 ET
+    # open. Pre-market and after-hours bars updated the EMA/MACD/RSI buffers above for
+    # continuity, but are neither logged nor traded — so each CSV / trade log stays a
+    # clean regular-session record. Session is keyed off the bar's own ET timestamp,
+    # never the server's UTC clock.
+    if not is_regular_session:
+        return
+
+    # ===== Regular session (06:30–13:00 PT) — everything below starts at the open =====
+    # Minute delimiter once per minute across all symbols.
+    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
+    minute_key = now_pt.strftime("%Y-%m-%d %H:%M")
+    if _last_delimiter_minute != minute_key:
+        _last_delimiter_minute = minute_key
+        log(f"{'='*10} 📊 {now_pt.strftime('%H:%M')} PT {'='*10}")
+
+    # Log indicators to per-symbol CSV — skip during warmup (NaN values not useful).
     close_price = float(df.iloc[-1]['close'])
     indicators_ready = not (math.isnan(macd) or math.isnan(sig) or math.isnan(rsi_val))
     if indicators_ready:
         _log_indicators(sym, ts, close_price, macd, sig, rsi_val)
 
     log(f"🔄 {sym} bar at {ts.isoformat()}: MACD={macd:.4f}, Signal={sig:.4f}, RSI={rsi_val:.2f}")
-    # log(f"📊 {sym} MACD Buffer: {[f'{v:.4f}' for v in buffer_values]} | Monotonic Increasing: {is_increasing}")
-
-    # Extended-hours bar: EMA/MACD/RSI buffers updated above for continuity.
-    # No position queries or order placement outside regular session.
-    if not is_regular_session:
-        log(f"⏭️  {sym}: extended-hours bar — EMA updated, no trades at {ts_et}")
-        return
 
     # Position check
     pos_obj = None
@@ -1027,17 +1035,16 @@ async def handle_bar(bar: dict):
         # else:
             # log(f"🧹 No stale open orders to cancel for {sym}")
 
-        # Entry-time cutoff: past NO_NEW_ENTRIES_AFTER (PT) we stop opening NEW
-        # positions (edge is in the first hour). Exits above still run for anything
-        # already held. Stale orders were cleaned up just above.
-        if NO_NEW_ENTRIES_AFTER is not None:
-            _now_pt = datetime.now(ZoneInfo('America/Los_Angeles'))
-            if (_now_pt.hour, _now_pt.minute) >= NO_NEW_ENTRIES_AFTER:
-                global _entry_cutoff_logged
-                if not _entry_cutoff_logged:
-                    log(f"🕒 Entry cutoff {NO_NEW_ENTRIES_AFTER[0]:02d}:{NO_NEW_ENTRIES_AFTER[1]:02d} PT reached — no new entries; managing open positions only.")
-                    _entry_cutoff_logged = True
-                return
+        # Entry-time cutoff (NO_NEW_ENTRIES_AFTER, PT): block opening NEW positions
+        # past the cutoff. entry_cutoff_reached() returns the flag; exits and logging
+        # already ran above, so the rest of the bar proceeds — we simply skip the buy.
+        buy_blocked = entry_cutoff_reached()
+        if buy_blocked:
+            global _entry_cutoff_logged
+            if not _entry_cutoff_logged:
+                log(f"🕒 Entry cutoff {NO_NEW_ENTRIES_AFTER[0]:02d}:{NO_NEW_ENTRIES_AFTER[1]:02d} PT reached — no new entries; managing open positions only.")
+                _entry_cutoff_logged = True
+            return
 
         sig_rising = (not math.isnan(sig_prev)) and (sig > sig_prev)
 

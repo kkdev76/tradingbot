@@ -15,7 +15,7 @@ import csv
 import math
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from itertools import product
 from zoneinfo import ZoneInfo
 
@@ -30,6 +30,11 @@ SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 SETTINGS_FILE = "settings.td"
 LOG_DIR       = "order_dashboard/indicator_logs"
 PT            = ZoneInfo("America/Los_Angeles")
+
+# Only recalibrate on session logs from this date onward. Earlier CSVs are
+# shutdown-stamped (one file spanning two sessions) and/or predate the `close`
+# column, so they are not trusted for parameter optimization.
+EARLIEST_TRUSTED_LOG_DATE = date(2026, 6, 29)
 
 NaN = float("nan")
 
@@ -98,7 +103,10 @@ def load_all_days(sym):
                 merged[r["ts"]] = r
     by_date = {}
     for r in merged.values():
-        by_date.setdefault(r["ts"].date(), []).append(r)
+        d = r["ts"].date()
+        if d < EARLIEST_TRUSTED_LOG_DATE:
+            continue   # pre-6/29 logs not trusted (shutdown-stamped / no close column)
+        by_date.setdefault(d, []).append(r)
     return [sorted(by_date[d], key=lambda x: x["ts"]) for d in sorted(by_date)]
 
 # ── replay engine (mirrors production logic exactly) ─────────────────────────

@@ -68,8 +68,8 @@ CRON_SHUTDOWN=12:55
 # 2026-06 analysis over 15 clean days: first hour +$285, rest of day -$212 (net,
 # reconciled to Alpaca fills). Exits / stop-loss / take-profit / EOD liquidation
 # all keep running; this only blocks opening NEW positions. Empty disables it.
-# NOTE: data sweet-spot is ~07:30 PT; 09:30 is a conservative first cut.
-NO_NEW_ENTRIES_AFTER=09:30
+# Interpreted as PT wall-clock, same as CRON_SHUTDOWN — never the server's UTC clock.
+NO_NEW_ENTRIES_AFTER=09:00
 MACD_NEUTRAL_DEFAULT=0.20
 
 # ===== Historical data and MACD warm-up configuration =====
