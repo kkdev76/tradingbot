@@ -1,0 +1,131 @@
+﻿
+======================================================================
+  BACKTEST � May 8, 2025  |  Symbols: NVDA, AAPL, META, MSFT, JPM
+======================================================================
+
+  Fetching bars for NVDA... 1678 bars
+  SKIP NVDA 08:24: RSI=78.40 not in [50.0,65.0]
+  SKIP NVDA 08:25: RSI=79.29 not in [50.0,65.0]
+  Fetching bars for AAPL... 1483 bars
+  SKIP AAPL 07:36: RSI=72.78 not in [50.0,65.0]
+  SKIP AAPL 07:37: RSI=71.52 not in [50.0,65.0]
+  SKIP AAPL 07:38: RSI=70.40 not in [50.0,65.0]
+  SKIP AAPL 07:39: RSI=67.31 not in [50.0,65.0]
+  SKIP AAPL 07:40: RSI=73.48 not in [50.0,65.0]
+  SKIP AAPL 07:41: RSI=72.54 not in [50.0,65.0]
+  SKIP AAPL 09:47: RSI=66.89 not in [50.0,65.0]
+  SKIP AAPL 09:48: RSI=70.03 not in [50.0,65.0]
+  SKIP AAPL 11:34: RSI=79.39 not in [50.0,65.0]
+  SKIP AAPL 11:35: RSI=80.46 not in [50.0,65.0]
+  SKIP AAPL 11:36: RSI=81.93 not in [50.0,65.0]
+  SKIP AAPL 11:37: RSI=82.79 not in [50.0,65.0]
+  SKIP AAPL 11:38: RSI=74.24 not in [50.0,65.0]
+  SKIP AAPL 12:22: RSI=71.21 not in [50.0,65.0]
+  SKIP AAPL 12:23: RSI=73.37 not in [50.0,65.0]
+  SKIP AAPL 12:24: RSI=73.32 not in [50.0,65.0]
+  SKIP AAPL 12:25: RSI=80.14 not in [50.0,65.0]
+  SKIP AAPL 12:26: RSI=75.07 not in [50.0,65.0]
+  SKIP AAPL 12:27: RSI=69.61 not in [50.0,65.0]
+  Fetching bars for META... 1172 bars
+  SKIP META 06:38: RSI not stable buf=[48.99, 64.55, 77.65, 68.9, 59.47]
+  SKIP META 06:39: MACD not monotonic buf=[-0.1134, 0.182, 0.3536, 0.4116, 0.2204]
+  SKIP META 08:09: RSI=74.41 not in [50.0,65.0]
+  SKIP META 08:10: RSI=68.40 not in [50.0,65.0]
+  SKIP META 08:11: RSI=66.75 not in [50.0,65.0]
+  SKIP META 08:12: RSI not stable buf=[72.05, 74.41, 68.4, 66.75, 61.89]
+  SKIP META 08:13: RSI=65.76 not in [50.0,65.0]
+  SKIP META 08:14: RSI=70.80 not in [50.0,65.0]
+  SKIP META 08:15: RSI=71.12 not in [50.0,65.0]
+  SKIP META 08:16: RSI=70.80 not in [50.0,65.0]
+  SKIP META 09:38: RSI=76.33 not in [50.0,65.0]
+  SKIP META 09:39: RSI=75.16 not in [50.0,65.0]
+  SKIP META 09:40: RSI=75.48 not in [50.0,65.0]
+  SKIP META 09:41: RSI=79.46 not in [50.0,65.0]
+  SKIP META 09:42: RSI not stable buf=[76.33, 75.16, 75.48, 79.46, 64.45]
+  SKIP META 09:43: RSI=70.88 not in [50.0,65.0]
+  SKIP META 10:53: RSI=74.05 not in [50.0,65.0]
+  SKIP META 10:54: RSI=76.76 not in [50.0,65.0]
+  SKIP META 10:55: RSI=67.66 not in [50.0,65.0]
+  Fetching bars for MSFT... 1151 bars
+  SKIP MSFT 06:30: RSI=89.65 not in [50.0,65.0]
+  SKIP MSFT 06:31: RSI=90.44 not in [50.0,65.0]
+  SKIP MSFT 06:32: RSI=91.60 not in [50.0,65.0]
+  SKIP MSFT 06:33: RSI=81.87 not in [50.0,65.0]
+  SKIP MSFT 06:34: MACD not monotonic buf=[0.5126, 0.7008, 0.8777, 0.9737, 0.9524]
+  SKIP MSFT 06:35: MACD not monotonic buf=[0.7008, 0.8777, 0.9737, 0.9524, 0.9663]
+  SKIP MSFT 08:14: RSI=73.29 not in [50.0,65.0]
+  SKIP MSFT 08:15: RSI=70.81 not in [50.0,65.0]
+  SKIP MSFT 08:16: RSI=72.88 not in [50.0,65.0]
+  SKIP MSFT 08:17: RSI=76.74 not in [50.0,65.0]
+  SKIP MSFT 08:18: RSI=78.21 not in [50.0,65.0]
+  SKIP MSFT 08:19: RSI=76.40 not in [50.0,65.0]
+  SKIP MSFT 08:20: RSI=84.47 not in [50.0,65.0]
+  SKIP MSFT 08:21: RSI=72.51 not in [50.0,65.0]
+  SKIP MSFT 08:22: RSI=75.97 not in [50.0,65.0]
+  SKIP MSFT 08:23: RSI=81.10 not in [50.0,65.0]
+  SKIP MSFT 08:24: RSI=81.93 not in [50.0,65.0]
+  SKIP MSFT 09:41: RSI=71.52 not in [50.0,65.0]
+  SKIP MSFT 09:42: RSI=66.19 not in [50.0,65.0]
+  SKIP MSFT 09:43: RSI=79.09 not in [50.0,65.0]
+  SKIP MSFT 09:44: RSI=78.76 not in [50.0,65.0]
+  SKIP MSFT 09:45: RSI=73.61 not in [50.0,65.0]
+  SKIP MSFT 09:46: MACD not monotonic buf=[0.1465, 0.193, 0.2268, 0.2448, 0.2437]
+  SKIP MSFT 10:26: RSI=67.66 not in [50.0,65.0]
+  SKIP MSFT 10:27: RSI=69.04 not in [50.0,65.0]
+  SKIP MSFT 10:28: RSI=73.68 not in [50.0,65.0]
+  SKIP MSFT 10:29: RSI=67.48 not in [50.0,65.0]
+  SKIP MSFT 11:37: RSI=72.37 not in [50.0,65.0]
+  SKIP MSFT 11:38: RSI=69.63 not in [50.0,65.0]
+  SKIP MSFT 11:39: RSI=68.34 not in [50.0,65.0]
+  SKIP MSFT 11:40: MACD not monotonic buf=[0.1209, 0.153, 0.1728, 0.1848, 0.1793]
+  Fetching bars for JPM... 835 bars
+  SKIP JPM 07:33: RSI=72.62 not in [50.0,65.0]
+  SKIP JPM 07:34: RSI=68.15 not in [50.0,65.0]
+  SKIP JPM 07:35: MACD not monotonic buf=[0.0412, 0.0762, 0.1136, 0.1356, 0.1311]
+  SKIP JPM 07:36: MACD not monotonic buf=[0.0762, 0.1136, 0.1356, 0.1311, 0.1307]
+  SKIP JPM 07:37: MACD not monotonic buf=[0.1136, 0.1356, 0.1311, 0.1307, 0.1138]
+  SKIP JPM 08:11: RSI not stable buf=[67.79, 60.68, 60.82, 63.36, 59.06]
+  SKIP JPM 08:12: MACD not monotonic buf=[0.0502, 0.0665, 0.0849, 0.092, 0.0853]
+  SKIP JPM 08:13: MACD not monotonic buf=[0.0665, 0.0849, 0.092, 0.0853, 0.0906]
+  SKIP JPM 08:14: MACD not monotonic buf=[0.0849, 0.092, 0.0853, 0.0906, 0.0958]
+  SKIP JPM 08:15: MACD not monotonic buf=[0.092, 0.0853, 0.0906, 0.0958, 0.1043]
+  SKIP JPM 08:16: RSI not stable buf=[52.18, 57.9, 58.85, 61.59, 59.68]
+  SKIP JPM 08:18: RSI=70.36 not in [50.0,65.0]
+  SKIP JPM 08:19: RSI=70.99 not in [50.0,65.0]
+  SKIP JPM 08:20: RSI=76.36 not in [50.0,65.0]
+  SKIP JPM 08:21: RSI=77.93 not in [50.0,65.0]
+  SKIP JPM 08:22: RSI=80.31 not in [50.0,65.0]
+  SKIP JPM 08:23: RSI=82.17 not in [50.0,65.0]
+  SKIP JPM 08:24: RSI=85.50 not in [50.0,65.0]
+  SKIP JPM 08:25: RSI=86.02 not in [50.0,65.0]
+  SKIP JPM 09:40: RSI=69.47 not in [50.0,65.0]
+  SKIP JPM 09:41: RSI=71.06 not in [50.0,65.0]
+  SKIP JPM 09:42: RSI=71.06 not in [50.0,65.0]
+  SKIP JPM 09:43: RSI=75.40 not in [50.0,65.0]
+  SKIP JPM 10:25: MACD not monotonic buf=[0.0125, 0.0298, 0.0573, 0.0798, 0.0782]
+  SKIP JPM 10:26: MACD not monotonic buf=[0.0298, 0.0573, 0.0798, 0.0782, 0.0809]
+  SKIP JPM 12:24: RSI=72.77 not in [50.0,65.0]
+  SKIP JPM 12:25: RSI=75.86 not in [50.0,65.0]
+  SKIP JPM 12:26: RSI not stable buf=[77.1, 69.92, 72.77, 75.86, 62.29]
+
+======================================================================
+  TRADE LOG -- May 8, 2025
+======================================================================
+
+  NVDA: NO TRADES
+
+  AAPL: NO TRADES
+
+  META: NO TRADES
+
+  MSFT: NO TRADES
+
+  -- JPM (budget $5,000) --
+  BUY  12:27 PT | 19 shares @ $255.46 = $4,853.74 | gap=119.9%
+  SELL 12:31 PT | 19 shares @ $255.40 (entry $255.46) P&L $-1.14 | MACD-EXIT:declining (0.1593->0.1597->0.1475)
+  >>> JPM net P&L: $-1.14
+
+======================================================================
+  TOTAL NET P&L for May 8, 2025: $-1.14
+======================================================================
+

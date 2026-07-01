@@ -206,52 +206,36 @@ def actual_pnl_by_sym(date_str):
 def main():
     dates = available_dates()
 
-    sl_headers = "  ".join(f"SL={sl:.2f}%" for sl in STOP_LOSS_VARIANTS)
-    sep_cols   = "  ".join("-" * 9 for _ in STOP_LOSS_VARIANTS)
+    sl_headers = "  ".join(f"SL {sl:.2f}%" for sl in STOP_LOSS_VARIANTS)
+    sep_cols   = "  ".join("-" * 10 for _ in STOP_LOSS_VARIANTS)
+
+    print(f"\n{'Date':<12}  {'Actual':>10}  {sl_headers}")
+    print(f"{'-'*12}  {'-'*10}  {sep_cols}")
 
     totals_actual = 0.0
     totals_sl = [0.0] * len(STOP_LOSS_VARIANTS)
 
     for date_str in dates:
-        actual_by_sym = actual_pnl_by_sym(date_str)
-        ap = sum(actual_by_sym.values())
+        ap = sum(actual_pnl_by_sym(date_str).values())
         totals_actual += ap
 
-        # Per-symbol replay for each stop-loss
-        sym_sl_pl = {}   # sym -> [pl per sl variant]
-        for sym, cfg in SYM_CFG.items():
-            rows = load_csv(os.path.join(LOG_DIR, f"{sym}_{date_str}.csv"))
-            sym_sl_pl[sym] = [replay_sym(rows, cfg, sl) for sl in STOP_LOSS_VARIANTS]
+        sl_day_totals = []
+        for sl in STOP_LOSS_VARIANTS:
+            day_pl = sum(
+                replay_sym(load_csv(os.path.join(LOG_DIR, f"{sym}_{date_str}.csv")), cfg, sl)
+                for sym, cfg in SYM_CFG.items()
+            )
+            sl_day_totals.append(day_pl)
 
-        sl_day_totals = [sum(sym_sl_pl[sym][j] for sym in SYM_CFG) for j in range(len(STOP_LOSS_VARIANTS))]
         for j in range(len(STOP_LOSS_VARIANTS)):
             totals_sl[j] += sl_day_totals[j]
 
-        # Print day header
-        print(f"\n{'='*75}")
-        print(f"  {date_str}   Actual: ${ap:+.2f}")
-        print(f"  {'Sym':<6}  {'Actual':>8}  {sl_headers}")
-        print(f"  {'-'*6}  {'-'*8}  {sep_cols}")
+        sl_cols = "  ".join(f"${v:>+8.2f}" for v in sl_day_totals)
+        print(f"{date_str:<12}  ${ap:>+8.2f}  {sl_cols}")
 
-        for sym in SYM_CFG:
-            a_sym = actual_by_sym.get(sym, 0.0)
-            sl_cols = "  ".join(f"${v:>+7.2f}" for v in sym_sl_pl[sym])
-            # only print rows where something happened
-            if a_sym != 0.0 or any(v != 0.0 for v in sym_sl_pl[sym]):
-                print(f"  {sym:<6}  ${a_sym:>+6.2f}  {sl_cols}")
-
-        sl_cols = "  ".join(f"${v:>+7.2f}" for v in sl_day_totals)
-        print(f"  {'TOTAL':<6}  ${ap:>+6.2f}  {sl_cols}")
-
-    # Summary
-    print(f"\n{'='*75}")
-    print(f"  CUMULATIVE ({len(dates)} days)")
-    print(f"  {'Date':<12}  {'Actual':>8}  {sl_headers}")
-    print(f"  {'-'*12}  {'-'*8}  {sep_cols}")
-
-    # reprint totals line
-    sl_totals = "  ".join(f"${v:>+7.2f}" for v in totals_sl)
-    print(f"  {'ALL DAYS':<12}  ${totals_actual:>+6.2f}  {sl_totals}")
+    print(f"{'-'*12}  {'-'*10}  {sep_cols}")
+    sl_totals = "  ".join(f"${v:>+8.2f}" for v in totals_sl)
+    print(f"{'TOTAL':<12}  ${totals_actual:>+8.2f}  {sl_totals}")
     print()
 
 

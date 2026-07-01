@@ -15,13 +15,14 @@ import csv
 import math
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import product
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestBarRequest
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 load_dotenv("keys.env")
 API_KEY    = os.getenv("APCA_API_KEY_ID")
@@ -82,16 +83,24 @@ def load_csv(path):
     return rows
 
 def load_all_days(sym):
-    """Return list of day-rows lists for all available CSVs for this symbol."""
-    days = []
+    """Return one rows-list per SESSION DATE for this symbol.
+
+    Rows from all of the symbol's CSVs are merged and regrouped by the bar's own
+    timestamp date (deduped by timestamp), so historical shutdown-stamped files —
+    where a single file spans two sessions, or two files overlap the same session —
+    are split back into correct, independent trading days. Each day is then replayed
+    with buffers reset, matching production's per-session behaviour."""
     if not os.path.isdir(LOG_DIR):
-        return days
+        return []
+    merged = {}  # timestamp -> row (dedupe; identical bars across files collapse)
     for fname in sorted(os.listdir(LOG_DIR)):
         if fname.startswith(f"{sym}_") and fname.endswith(".csv"):
-            rows = load_csv(os.path.join(LOG_DIR, fname))
-            if rows:
-                days.append(rows)
-    return days
+            for r in load_csv(os.path.join(LOG_DIR, fname)):
+                merged[r["ts"]] = r
+    by_date = {}
+    for r in merged.values():
+        by_date.setdefault(r["ts"].date(), []).append(r)
+    return [sorted(by_date[d], key=lambda x: x["ts"]) for d in sorted(by_date)]
 
 # ── replay engine (mirrors production logic exactly) ─────────────────────────
 
@@ -100,10 +109,12 @@ RSI_MIN      = 50.0
 RSI_BUF_SIZE = 5
 
 def replay(days, budget, stop_loss_pct, profit_take_pct,
-           macd_min, gap_pct_thresh, sig_min, cooldown_min=10):
+           macd_min, gap_pct_thresh, sig_min, cooldown_min=10, entry_cutoff=None):
     """
     Replay all days for one symbol with given params.
     Each day is independent (buffers reset between days).
+    entry_cutoff: optional (hour, minute) PT — no NEW entries at/after this time
+                  (mirrors production NO_NEW_ENTRIES_AFTER). Exits unaffected.
     Returns total P&L across all days.
     """
     total_pl = 0.0
@@ -180,6 +191,11 @@ def replay(days, budget, stop_loss_pct, profit_take_pct,
                 continue
 
             # ── entry checks ────────────────────────────────────────────────
+
+            # Entry-time cutoff (mirror production NO_NEW_ENTRIES_AFTER): no NEW
+            # positions at/after this PT time. ts is naive PT wall-clock.
+            if entry_cutoff is not None and (ts.hour, ts.minute) >= entry_cutoff:
+                continue
 
             # MACD floor + regime gate
             if macd <= 0 or macd < macd_min:
@@ -265,16 +281,39 @@ def main():
     budget          = float(get_value(content, "DEFAULT_DOLLAR",             "5000"))
     cooldown_min    = int(  get_value(content, "MIN_TRADE_COOLDOWN_MINUTES", "10"))
 
-    print(f"Fetching latest closing prices for: {', '.join(symbols)}")
+    # Entry-time cutoff — keep the sweep consistent with production's entry window.
+    raw_cutoff   = (get_value(content, "NO_NEW_ENTRIES_AFTER", "") or "").strip()
+    entry_cutoff = None
+    if raw_cutoff:
+        try:
+            hh, mm = map(int, raw_cutoff.split(":"))
+            entry_cutoff = (hh, mm)
+        except ValueError:
+            entry_cutoff = None
+
+    ET = ZoneInfo("America/New_York")
+    print(f"Fetching official daily closing prices for: {', '.join(symbols)}")
     data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
-    bars = data_client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=symbols))
-    prices = {sym: bars[sym].close for sym in symbols if sym in bars}
+    feed = get_value(content, "HISTORICAL_FEED", "iex")
+    daily = data_client.get_stock_bars(StockBarsRequest(
+        symbol_or_symbols=symbols,
+        timeframe=TimeFrame.Day,
+        start=datetime.now(timezone.utc) - timedelta(days=7),
+        feed=feed,
+    ))
+    # Most recent completed daily bar = the day's official 4pm ET RTH close.
+    prices    = {}
+    date_str  = datetime.now(ET).strftime("%Y-%m-%d")
+    for sym in symbols:
+        rows = daily.data.get(sym, [])
+        if rows:
+            prices[sym] = rows[-1].close
+            date_str    = rows[-1].timestamp.astimezone(ET).strftime("%Y-%m-%d")
 
-    ET       = ZoneInfo("America/New_York")
-    date_str = datetime.now(ET).strftime("%Y-%m-%d")
-
+    cutoff_desc = f"{entry_cutoff[0]:02d}:{entry_cutoff[1]:02d} PT" if entry_cutoff else "none"
     print(f"\nRunning sweep on indicator logs in '{LOG_DIR}/'")
-    print(f"Fixed params — stop-loss: {stop_loss_pct}%  profit-take: {profit_take_pct}%  budget: ${budget:.0f}\n")
+    print(f"Fixed params — stop-loss: {stop_loss_pct}%  profit-take: {profit_take_pct}%  "
+          f"budget: ${budget:.0f}  entry-cutoff: {cutoff_desc}\n")
 
     best_params = {}
 
@@ -314,7 +353,7 @@ def main():
 
         for macd_min, gap_pct, sig_min in product(c_macd, c_gap, c_sig):
             pl = replay(days, sym_budget, stop_loss_pct, pt,
-                        macd_min, gap_pct, sig_min, cooldown_min)
+                        macd_min, gap_pct, sig_min, cooldown_min, entry_cutoff)
             if best_pl is None or pl > best_pl:
                 best_pl    = pl
                 best_combo = (macd_min, gap_pct, sig_min)

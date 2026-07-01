@@ -19,12 +19,12 @@ MACD_GAP_PERCENT=40
 MACD_GAP_PERCENT_AVGO=90
 MACD_GAP_PERCENT_CAT=20
 # Per-symbol overrides — formula: macd_min = price * 0.0005, abs_gap = price * 0.0003
-# Prices from 4pm ET close 2026-06-29: GOOGL~$352, AVGO~$370, AMZN~$242, CAT~$1021, MSFT~$370, AAPL~$283
+# Prices from 4pm ET close 2026-06-30: GOOGL~$357, AVGO~$378, AMZN~$239, CAT~$1058, MSFT~$376, AAPL~$289
 # GOOGL~$364, AVGO~$397, AMZN~$245, CAT~$916, MSFT~$412, AAPL~$301
 MACD_MIN_VALUE_GOOGL=0.14
-MACD_MIN_VALUE_AVGO=0.22
+MACD_MIN_VALUE_AVGO=0.19
 MACD_MIN_VALUE_AMZN=0.02
-MACD_MIN_VALUE_CAT=0.20
+MACD_MIN_VALUE_CAT=0.21
 MACD_MIN_VALUE_MSFT=0.09
 MACD_MIN_VALUE_AAPL=0.09
 MACD_ABS_GAP_MIN_GOOGL=0.10
@@ -63,6 +63,13 @@ SIGNAL_MIN_VALUE_AAPL=0.06
 NEGATIVE_PL_THRESHOLD=-100.0
 STOP_LOSS_PERCENT=0.35
 CRON_SHUTDOWN=12:55
+# No new entries (opening BUYs) after this PT wall-clock time. The strategy's edge
+# is concentrated in the first trading hour; midday entries historically bleed —
+# 2026-06 analysis over 15 clean days: first hour +$285, rest of day -$212 (net,
+# reconciled to Alpaca fills). Exits / stop-loss / take-profit / EOD liquidation
+# all keep running; this only blocks opening NEW positions. Empty disables it.
+# NOTE: data sweet-spot is ~07:30 PT; 09:30 is a conservative first cut.
+NO_NEW_ENTRIES_AFTER=09:30
 MACD_NEUTRAL_DEFAULT=0.20
 
 # ===== Historical data and MACD warm-up configuration =====
@@ -93,5 +100,5 @@ PROFIT_TAKE_AAPL=0.5
 PROFIT_TAKE_DEFAULT=0.5
 MACD_GAP_PERCENT_GOOGL=40
 MACD_GAP_PERCENT_AMZN=50
-MACD_GAP_PERCENT_MSFT=50
+MACD_GAP_PERCENT_MSFT=70
 MACD_GAP_PERCENT_AAPL=70

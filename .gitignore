@@ -37,3 +37,12 @@ npm-debug.log*
 
 # Local-only tools (not tracked in git)
 order_dashboard/
+
+# Local-only analysis scripts (not tracked in git)
+backtests/
+sweeps/
+simulations/
+archive/
+
+# Claude Code local tooling / worktrees (not project code)
+.claude/

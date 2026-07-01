@@ -9,6 +9,7 @@ import websockets
 import logging
 import time
 import sys
+import subprocess
 import signal
 import threading
 import atexit
@@ -73,6 +74,23 @@ STALL_DECEL_RATIO = 0.30  # recent pace must be >= this fraction of the earlier 
 BOOTSTRAP_BAR_COUNT  = int(os.getenv('BOOTSTRAP_BAR_COUNT', '800'))
 BOOTSTRAP_MAX_DAYS_BACK = int(os.getenv('BOOTSTRAP_MAX_DAYS_BACK', '5'))
 MACD_WARMUP_BARS = int(os.getenv('MACD_WARMUP_BARS', '35'))
+
+# Entry-time cutoff: block opening NEW positions after this PT wall-clock time.
+# The edge is concentrated in the first trading hour; midday entries bleed
+# (2026-06 analysis, 15 clean days). Exits/risk management are unaffected.
+# Format "HH:MM" (PT); empty/invalid disables the cutoff.
+def _parse_hhmm(raw):
+    raw = (raw or '').strip()
+    if not raw:
+        return None
+    try:
+        h, m = map(int, raw.split(':'))
+        return (h, m)
+    except Exception:
+        return None
+
+NO_NEW_ENTRIES_AFTER = _parse_hhmm(os.getenv('NO_NEW_ENTRIES_AFTER', ''))
+_entry_cutoff_logged = False
 WS_URL = 'wss://stream.data.alpaca.markets/v2/sip'
 
 # ===== Risk Guard config =====
@@ -568,14 +586,17 @@ def fetch_quote(sym: str) -> tuple:
 
 # ===== Per-symbol indicator CSV logging =====
 _INDICATOR_LOG_DIR = 'indicator_logs'
-_indicator_log_writers = {}   # sym -> csv.writer
-_indicator_log_files   = {}   # sym -> file handle
+_indicator_log_writers = {}   # (sym, session_date) -> csv.writer
+_indicator_log_files   = {}   # (sym, session_date) -> file handle
 
-def _get_indicator_writer(sym: str):
-    """Return (creating if needed) the CSV writer for a symbol."""
-    if sym not in _indicator_log_writers:
+def _get_indicator_writer(sym: str, date_str: str):
+    """Return (creating if needed) the CSV writer for a symbol on a given session
+    date. Keyed by (sym, date) — derived from the BAR's own timestamp, not the
+    process start time — so a run that spans midnight routes each bar to the file
+    for its own session and one file always holds exactly one session."""
+    key = (sym, date_str)
+    if key not in _indicator_log_writers:
         os.makedirs(_INDICATOR_LOG_DIR, exist_ok=True)
-        date_str = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d')
         filepath = os.path.join(_INDICATOR_LOG_DIR, f"{sym}_{date_str}.csv")
         is_new = not os.path.exists(filepath) or os.path.getsize(filepath) == 0
         f = open(filepath, 'a', newline='', encoding='utf-8')
@@ -583,18 +604,20 @@ def _get_indicator_writer(sym: str):
         if is_new:
             writer.writerow(['timestamp', 'close', 'MACD', 'Signal', 'RSI'])
             f.flush()
-        _indicator_log_writers[sym] = writer
-        _indicator_log_files[sym] = f
+        _indicator_log_writers[key] = writer
+        _indicator_log_files[key] = f
         log(f"📁 Indicator log opened: {filepath}")
-    return _indicator_log_writers[sym]
+    return _indicator_log_writers[key]
 
 def _log_indicators(sym: str, ts, close: float, macd: float, sig: float, rsi: float):
-    """Append one row to the per-symbol indicator CSV."""
+    """Append one row to the per-symbol indicator CSV (filed by the bar's PT date)."""
     try:
-        writer = _get_indicator_writer(sym)
-        ts_pt = ts.astimezone(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%dT%H:%M:%S')
+        ts_pt_dt = ts.astimezone(ZoneInfo("America/Los_Angeles"))
+        date_str = ts_pt_dt.strftime('%Y-%m-%d')          # session date = bar's PT date
+        writer = _get_indicator_writer(sym, date_str)
+        ts_pt = ts_pt_dt.strftime('%Y-%m-%dT%H:%M:%S')
         writer.writerow([ts_pt, f'{close:.4f}', f'{macd:.4f}', f'{sig:.4f}', f'{rsi:.2f}'])
-        _indicator_log_files[sym].flush()
+        _indicator_log_files[(sym, date_str)].flush()
     except Exception as e:
         log(f"⚠️ Failed to write indicator log for {sym}: {e}")
 
@@ -1004,6 +1027,18 @@ async def handle_bar(bar: dict):
         # else:
             # log(f"🧹 No stale open orders to cancel for {sym}")
 
+        # Entry-time cutoff: past NO_NEW_ENTRIES_AFTER (PT) we stop opening NEW
+        # positions (edge is in the first hour). Exits above still run for anything
+        # already held. Stale orders were cleaned up just above.
+        if NO_NEW_ENTRIES_AFTER is not None:
+            _now_pt = datetime.now(ZoneInfo('America/Los_Angeles'))
+            if (_now_pt.hour, _now_pt.minute) >= NO_NEW_ENTRIES_AFTER:
+                global _entry_cutoff_logged
+                if not _entry_cutoff_logged:
+                    log(f"🕒 Entry cutoff {NO_NEW_ENTRIES_AFTER[0]:02d}:{NO_NEW_ENTRIES_AFTER[1]:02d} PT reached — no new entries; managing open positions only.")
+                    _entry_cutoff_logged = True
+                return
+
         sig_rising = (not math.isnan(sig_prev)) and (sig > sig_prev)
 
         # Two-regime momentum gate (thresholds are per-symbol, fall back to global defaults):
@@ -1193,6 +1228,57 @@ def shutdown_watchdog():
         time.sleep(15)
 
 
+def run_startup_recalibration():
+    """Pre-open: refresh per-symbol MACD thresholds from the latest daily close +
+    historical indicator logs (recalibrate_settings.py), then reload settings.td so
+    the fresh values take effect before the first bar is traded.
+
+    Runs ONLY when launched before the 06:30 PT open, so a mid-session restart
+    (auto-reconnect / crash recovery / singleton relaunch) never shifts parameters
+    intraday. Never blocks trading: on any failure we log and keep the current
+    settings.td unchanged."""
+    now_pt = datetime.now(ZoneInfo("America/Los_Angeles"))
+    if (now_pt.hour, now_pt.minute) >= (6, 30):
+        log(f"⏭️ [Recalibrate] Launched {now_pt.strftime('%H:%M')} PT (at/after open) — "
+            "skipping recalibration; using existing settings.td.")
+        return
+
+    script_dir    = os.path.dirname(os.path.abspath(__file__))
+    settings_path = os.path.join(script_dir, "settings.td")
+    log("🔧 [Recalibrate] Refreshing per-symbol thresholds from the latest daily close before open…")
+    try:
+        result = subprocess.run(
+            [sys.executable, os.path.join(script_dir, "recalibrate_settings.py")],
+            cwd=script_dir, capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        log("⚠️ [Recalibrate] Timed out (>300s) — keeping existing settings.td.")
+        return
+    except Exception as e:
+        log(f"⚠️ [Recalibrate] Could not run ({e}) — keeping existing settings.td.")
+        return
+
+    if result.returncode != 0:
+        log(f"⚠️ [Recalibrate] Exited {result.returncode} — keeping existing settings.td.")
+        if result.stderr:
+            log(f"   [Recalibrate] stderr: {result.stderr.strip()[:400]}")
+        return
+
+    # Echo the per-symbol result lines into the daily log for the record.
+    for line in result.stdout.splitlines():
+        s = line.strip()
+        if s.startswith("best:") or "updated" in s or "sim_PL" in s:
+            log(f"   [Recalibrate] {s}")
+
+    # Reload the freshly written values and drop cached per-symbol lookups so the
+    # getters re-read from the new environment on the first bar.
+    load_dotenv(settings_path, override=True)
+    for cache in (_macd_min_cache, _signal_min_cache, _macd_abs_gap_cache,
+                  _gap_pct_cache, _macd_neutral_cache, _profit_take_cache):
+        cache.clear()
+    log("✅ [Recalibrate] settings.td refreshed and reloaded into environment.")
+
+
 # Main loop
 async def main():
     for sym in SYMBOLS:
@@ -1250,8 +1336,16 @@ if __name__ == '__main__':
         sys.exit(0)
     # 2) Singleton, last-wins: kill any leftover instance and claim the connection.
     acquire_singleton()
+    # 2b) Pre-open: recalibrate per-symbol thresholds from the latest close, then
+    #     reload settings.td so the fresh values are live before trading begins.
+    run_startup_recalibration()
     # 3) Wall-clock shutdown watchdog, independent of market data.
     threading.Thread(target=shutdown_watchdog, name="shutdown-watchdog", daemon=True).start()
+    # 3b) Entry-time cutoff (observability).
+    if NO_NEW_ENTRIES_AFTER is not None:
+        log(f"🕒 Entry cutoff armed: no new entries after {NO_NEW_ENTRIES_AFTER[0]:02d}:{NO_NEW_ENTRIES_AFTER[1]:02d} PT (exits still run).")
+    else:
+        log("⏭️ NO_NEW_ENTRIES_AFTER not set — entry-time cutoff DISABLED.")
 
     # Auto-reconnect loop: restarts main() on any WebSocket/network crash.
     # SystemExit (raised by halt_trading → sys.exit(2)) is a BaseException, NOT
