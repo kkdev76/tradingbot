@@ -15,6 +15,7 @@ import csv
 import math
 import os
 import re
+import sys
 from datetime import date, datetime, timezone
 from itertools import product
 from zoneinfo import ZoneInfo
@@ -318,16 +319,19 @@ def main():
           f"budget: ${budget:.0f}  entry-cutoff: {cutoff_desc}\n")
 
     best_params = {}
+    skipped = {}
 
     for sym in symbols:
         price = prices.get(sym)
         if price is None:
             print(f"  {sym}: no price data, skipping")
+            skipped[sym] = "no price data"
             continue
 
         days = load_all_days(sym)
         if not days:
             print(f"  {sym}: no indicator logs found, skipping")
+            skipped[sym] = "no indicator logs found"
             continue
 
         # per-symbol budget override
@@ -369,6 +373,25 @@ def main():
             "best_pl":  best_pl,
         }
         print(f"    best: MACD_MIN={macd_min:.2f}  GAP%={gap_pct}  SIG_MIN={sig_min:.2f}  sim_PL=${best_pl:+.2f}")
+
+    # Refuse to write if NOTHING was optimized. A silent no-op that leaves stale
+    # thresholds in place (while reporting "settings.td updated") is worse than an
+    # obvious failure — it's exactly how the 2026-07-01 run shipped yesterday's
+    # params unnoticed. Exit non-zero so the launcher logs a warning and keeps the
+    # existing settings.td unchanged.
+    if not best_params:
+        reasons = "; ".join(f"{s}: {r}" for s, r in skipped.items()) or "unknown"
+        msg = (f"ERROR: Recalibration optimized 0/{len(symbols)} symbols — "
+               f"NOT writing {SETTINGS_FILE}. Reasons: {reasons}")
+        print(msg)
+        print(msg, file=sys.stderr)
+        sys.exit(1)
+
+    # Some (but not all) symbols optimized — write the winners, but flag the gap.
+    if skipped:
+        print(f"WARNING: Recalibration skipped {len(skipped)}/{len(symbols)} symbol(s) "
+              f"(kept prior settings for them): "
+              + "; ".join(f"{s}: {r}" for s, r in skipped.items()))
 
     # ── write to settings.td ─────────────────────────────────────────────────
     print(f"\nUpdating {SETTINGS_FILE} ...")

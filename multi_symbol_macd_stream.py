@@ -1270,14 +1270,22 @@ def run_startup_recalibration():
 
     if result.returncode != 0:
         log(f"⚠️ [Recalibrate] Exited {result.returncode} — keeping existing settings.td.")
+        # Echo full stdout on failure so the skip reasons (e.g. "no indicator logs
+        # found") are captured, not just the exit code.
+        for line in result.stdout.splitlines():
+            s = line.strip()
+            if s:
+                log(f"   [Recalibrate] {s}")
         if result.stderr:
             log(f"   [Recalibrate] stderr: {result.stderr.strip()[:400]}")
         return
 
-    # Echo the per-symbol result lines into the daily log for the record.
+    # Echo the full recalibrate output into the daily log for the record. Log every
+    # non-empty line (not just best:/updated) so a no-op run — e.g. every symbol
+    # skipped for missing logs — is visible instead of masquerading as success.
     for line in result.stdout.splitlines():
         s = line.strip()
-        if s.startswith("best:") or "updated" in s or "sim_PL" in s:
+        if s:
             log(f"   [Recalibrate] {s}")
 
     # Reload the freshly written values and drop cached per-symbol lookups so the
